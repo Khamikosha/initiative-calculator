@@ -1,0 +1,7 @@
+{"meta":{"name":"Push-кампания по базе","type":"comms","horizon_months":12,"discount_rate_annual":0.20},
+ "audience":{"target_size":4000000,"baseline_organic_apps_m":0},
+ "channels":[{"name":"Push + in-app","kind":"internal","reach_abs":4000000,"budget":0,"response_rate":0.015,"cr_to_app":0.3}],
+ "funnel":{"approval_rate":0.85,"activation_rate":0.7,"cannibalization":0.1,"deadweight":0.0},
+ "unit_economics":{"avg_balance":30000,"nim_annual":0.06,"monthly_turnover":18000,"interchange_rate":0.011,"cashback_rate":0.004,"servicing_cost_m":40,"cor_annual":0.0,"ramp_months":2,"monthly_churn":0.04},
+ "costs":{"production":800000,"campaign_months":1},
+ "confidence":{"A":6,"B":4,"C":2,"D":1}}

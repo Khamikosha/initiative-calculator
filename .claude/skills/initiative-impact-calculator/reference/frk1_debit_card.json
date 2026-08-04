@@ -1,0 +1,96 @@
+{
+  "meta": {
+    "name": "ФРК 1 — запуск дебетовой карты",
+    "type": "frk1",
+    "horizon_months": 24,
+    "discount_rate_annual": 0.2
+  },
+  "audience": {
+    "target_size": 20000000,
+    "baseline_organic_apps_m": 40000,
+    "halo_months": 2,
+    "halo_decay": 0.5
+  },
+  "channels": [
+    {
+      "name": "Внутренние посевы",
+      "kind": "internal",
+      "reach_abs": 3000000,
+      "budget": 0,
+      "response_rate": 0.02,
+      "cr_to_app": 0.25,
+      "frk_tier": 4
+    },
+    {
+      "name": "Внешние посевы",
+      "kind": "perform",
+      "budget": 20000000,
+      "cpm": 250,
+      "ctr": 0.004,
+      "cr_to_app": 0.03,
+      "frk_tier": 3
+    },
+    {
+      "name": "Перформанс",
+      "kind": "perform",
+      "budget": 40000000,
+      "cpm": 400,
+      "ctr": 0.006,
+      "cr_to_app": 0.04,
+      "frk_tier": 4
+    },
+    {
+      "name": "Наружная (OOH/DOOH)",
+      "kind": "brand",
+      "budget": 30000000,
+      "cpm": 120,
+      "brand_uplift": 0.06,
+      "frk_tier": 2
+    },
+    {
+      "name": "ТВ",
+      "kind": "brand",
+      "budget": 90000000,
+      "cpm": 250,
+      "brand_uplift": 0.12,
+      "frk_tier": 1
+    }
+  ],
+  "funnel": {
+    "approval_rate": 0.6,
+    "activation_rate": 0.65,
+    "cannibalization": 0.15,
+    "deadweight": 0.0
+  },
+  "unit_economics": {
+    "avg_balance": 45000,
+    "nim_annual": 0.07,
+    "monthly_turnover": 28000,
+    "interchange_rate": 0.011,
+    "fee_income_m": 0,
+    "cashback_rate": 0.005,
+    "servicing_cost_m": 70,
+    "cor_annual": 0.0,
+    "ramp_months": 3,
+    "monthly_churn": 0.035
+  },
+  "costs": {
+    "production": 15000000,
+    "it_dev": 0,
+    "campaign_months": 3,
+    "opex_monthly": 0,
+    "one_off_other": 0
+  },
+  "rice": {
+    "reach": 0,
+    "impact": 2,
+    "confidence": 0.6,
+    "effort": 12
+  },
+  "confidence": {
+    "A": 4,
+    "B": 5,
+    "C": 6,
+    "D": 3
+  }
+}

@@ -1,0 +1,8 @@
+{"meta":{"name":"Новая кредитка на полку","type":"product_launch","horizon_months":36,"discount_rate_annual":0.20},
+ "audience":{"target_size":8000000,"baseline_organic_apps_m":12000},
+ "channels":[{"name":"Внутренние каналы","kind":"internal","reach_abs":5000000,"budget":0,"response_rate":0.012,"cr_to_app":0.28}],
+ "funnel":{"approval_rate":0.35,"activation_rate":0.6,"cannibalization":0.3,"deadweight":0.0},
+ "unit_economics":{"avg_balance":60000,"nim_annual":0.18,"monthly_turnover":35000,"interchange_rate":0.012,"cashback_rate":0.006,"servicing_cost_m":90,"cor_annual":0.07,"ramp_months":4,"monthly_churn":0.025},
+ "costs":{"production":5000000,"it_dev":120000000,"campaign_months":2,"opex_monthly":3500000},
+ "rice":{"reach":0,"impact":3,"confidence":0.5,"effort":40},
+ "confidence":{"A":2,"B":3,"C":5,"D":8}}

@@ -1,0 +1,17 @@
+{
+  "meta": {"name": "Реферальная программа — СберВклад Молодёжный, 500 бонусов обоим", "type": "pilot",
+           "horizon_months": 24, "discount_rate_annual": 0.20},
+  "audience": {"target_size": 300000, "baseline_organic_apps_m": 0, "halo_months": 0, "halo_decay": 0},
+  "channels": [
+    {"name": "Реферальная механика в приложении", "kind": "internal", "reach_abs": 300000, "budget": 0,
+     "response_rate": 0.05, "cr_to_app": 0.75}
+  ],
+  "funnel": {"approval_rate": 0.95, "activation_rate": 0.70, "cannibalization": 0.10, "deadweight": 0.40},
+  "unit_economics": {"avg_balance": 40000, "nim_annual": 0.02, "monthly_turnover": 0, "interchange_rate": 0,
+                     "fee_income_m": 0, "cashback_rate": 0, "servicing_cost_m": 15, "cor_annual": 0,
+                     "ramp_months": 1, "monthly_churn": 0.05},
+  "costs": {"production": 1500000, "it_dev": 3000000, "campaign_months": 3, "opex_monthly": 0,
+            "one_off_other": 0, "acq_cost_per_client": 1000},
+  "rice": {"reach": 0, "impact": 1, "confidence": 0.4, "effort": 6},
+  "confidence": {"A": 1, "B": 2, "C": 3, "D": 8}
+}
