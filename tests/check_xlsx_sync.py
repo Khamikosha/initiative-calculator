@@ -7,13 +7,14 @@
 (LibreOffice или открыть/сохранить в Excel) — иначе формулы читаются как None.
 
 Запуск: make check
+        python3 tests/check_xlsx_sync.py [кейс.json] [файл.xlsx]
 """
 import json, sys, importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-XLSX = ROOT / "docs" / "Калькулятор_эффекта_инициатив.xlsx"
-CASE = ROOT / "cases" / "frk1_debit_card.json"      # Excel собран под этот кейс
+CASE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "cases" / "frk1_debit_card.json"
+XLSX = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "docs" / "Калькулятор_эффекта_инициатив.xlsx"
 
 spec = importlib.util.spec_from_file_location("calc", ROOT / "src" / "calc.py")
 calc = importlib.util.module_from_spec(spec); spec.loader.exec_module(calc)
@@ -27,39 +28,58 @@ if not XLSX.exists():
     sys.exit(f"Нет файла {XLSX}. Соберите: make xlsx")
 
 wb = load_workbook(XLSX, data_only=True)
-m = wb["Модель"]
+# tests/recalc.py возвращает книгу с заглавными именами листов — ищем без учёта регистра
+name = next((s for s in wb.sheetnames if s.lower() == "модель"), None)
+if name is None:
+    sys.exit(f"В книге нет листа «Модель»: {wb.sheetnames}")
+m = wb[name]
 
-# строки листа «Модель» — синхронизированы с src/build_xlsx.py
-ROW = {"инкремент": 26, "NPV": 39, "маркетинг": 43, "CPA": 45}
-COL = {4: "B", 3: "C", 2: "D", 1: "E"}              # уровень ФРК -> колонка
+# Строки листа «Модель» ищем по подписи, а не по номеру: номера едут при любой правке модели.
+LABELS = {"инкремент": "ИНКРЕМЕНТАЛЬНЫЕ КЛИЕНТЫ", "NPV": "NPV"}
+ROW = {}
+for key, label in LABELS.items():
+    found = [c.row for c in m["A"] if isinstance(c.value, str) and c.value.strip() == label]
+    if not found:
+        sys.exit(f"На листе «Модель» не найдена строка «{label}» — сверять нечего.")
+    ROW[key] = found[0]
 
-cfg = json.loads(CASE.read_text(encoding="utf-8"))
-ladder = calc.frk_ladder(cfg)
-if not ladder:
-    sys.exit("В кейсе нет frk_tier — нечего сверять.")
-
+TIER_COL = {4: "B", 3: "C", 2: "D", 1: "E"}
+SCEN_COL = {"pessimistic": "F", "base": "G", "optimistic": "H"}
 TOL = 1.0                                            # допуск в рублях/клиентах
-rows, bad = [], 0
-for lvl in ladder["levels"]:
-    col = COL[lvl["frk_tier"]]
-    x_npv = m[f"{col}{ROW['NPV']}"].value
-    x_cl = m[f"{col}{ROW['инкремент']}"].value
-    if x_npv is None:
+
+cfg = calc.resolve_segments(json.loads(CASE.read_text(encoding="utf-8")))
+rows = []
+
+def cell(col, key):
+    v = m[f"{col}{ROW[key]}"].value
+    if v is None:
         sys.exit("Excel не пересчитан — формулы читаются как None.\n"
                  "Пересчитайте файл (LibreOffice/Excel) и повторите.")
-    d_npv, d_cl = abs(x_npv - lvl["npv"]), abs(x_cl - lvl["incremental_clients"])
-    good = d_npv <= TOL and d_cl <= TOL
-    bad += not good
-    rows.append((lvl["frk_tier"], lvl["npv"], x_npv, d_npv,
-                 lvl["incremental_clients"], x_cl, d_cl, good))
+    return v
+
+def compare(title, col, npv, clients):
+    x_npv, x_cl = cell(col, "NPV"), cell(col, "инкремент")
+    d_npv, d_cl = abs(x_npv - npv), abs(x_cl - clients)
+    rows.append((title, npv, x_npv, d_npv, clients, x_cl, d_cl, d_npv <= TOL and d_cl <= TOL))
+
+ladder = calc.frk_ladder(cfg)
+if ladder:
+    for lvl in ladder["levels"]:
+        compare(f"ФРК {lvl['frk_tier']}", TIER_COL[lvl["frk_tier"]],
+                lvl["npv"], lvl["incremental_clients"])
+
+for name, s in calc.SCEN.items():
+    f_, p_ = calc.evaluate(calc.apply_scenario(cfg, s))
+    compare(name, SCEN_COL[name], p_["npv"], f_["incremental_clients"])
 
 print(f"\nСверка Excel ↔ движок  ({CASE.name})")
-print(f"{'ФРК':>4} {'NPV движок':>16} {'NPV Excel':>16} {'Δ':>8}   "
+print(f"{'вариант':>14} {'NPV движок':>16} {'NPV Excel':>16} {'Δ':>8}   "
       f"{'клиенты движок':>15} {'клиенты Excel':>14} {'Δ':>6}")
-for t, e_npv, x_npv, d_npv, e_cl, x_cl, d_cl, good in rows:
-    print(f"{t:>4} {e_npv:>16,} {x_npv:>16,.0f} {d_npv:>8.2f}   "
+for title, e_npv, x_npv, d_npv, e_cl, x_cl, d_cl, good in rows:
+    print(f"{title:>14} {e_npv:>16,} {x_npv:>16,.0f} {d_npv:>8.2f}   "
           f"{e_cl:>15,} {x_cl:>14,.0f} {d_cl:>6.2f}  {'OK' if good else 'РАСХОЖДЕНИЕ'}")
 
+bad = sum(1 for r in rows if not r[-1])
 if bad:
     print(f"\n✗ Расхождений: {bad}. Excel и движок считают по-разному — см. BACKLOG.md, пункт P0.")
     sys.exit(1)

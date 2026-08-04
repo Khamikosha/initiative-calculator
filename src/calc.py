@@ -7,6 +7,154 @@ def g(d, k, default=0.0):
     v = d.get(k, default)
     return default if v is None else v
 
+# ------------------------------------------------------------------ ВОЗРАСТНЫЕ СЕГМЕНТЫ
+SEGMENTS = {
+    "kids":  {"name": "Дети (0–13)",       "age_min": 0,  "age_max": 13},
+    "teens": {"name": "Подростки (14–17)", "age_min": 14, "age_max": 17},
+    "youth": {"name": "Молодёжь (18–24)",  "age_min": 18, "age_max": 24},
+}
+
+# С какого возраста продукт доступен клиенту. Правила банка, а не допущения модели:
+# до 14 лет счёт и вклад открывает третье лицо в офисе по свидетельству о рождении;
+# с 6 лет — детская карта и копилки в детском приложении; с 14 — вход в банковское
+# приложение, накопительные продукты, брокерский счёт, подписка и программа лояльности;
+# с 18 — весь функционал банка и экосистемы.
+PRODUCT_AGE_GATE = {
+    "account": 0, "deposit": 0, "piggy_bank": 6, "card": 6,
+    "savings": 14, "broker": 14, "prime": 14, "loyalty": 14,
+    "credit": 18, "ecosystem": 18,
+}
+# Продукты, которые для детей оформляются только в офисе и только третьим лицом
+BRANCH_ONLY_UNDER_14 = {"account", "deposit"}
+APP_AGE = 14                       # доступ в банковское приложение
+
+
+def segment_availability(seg_id, product):
+    """Доля возрастов сегмента, которым продукт доступен, и минимальный доступный возраст."""
+    s = SEGMENTS[seg_id]
+    gate = PRODUCT_AGE_GATE.get(product, 0)
+    lo = max(s["age_min"], gate)
+    span = s["age_max"] - s["age_min"] + 1
+    return max(0, s["age_max"] - lo + 1) / span, lo
+
+
+def _wavg(pairs):
+    """Взвешенное среднее. pairs — список (вес, значение)."""
+    w = sum(p[0] for p in pairs)
+    return sum(p[0] * p[1] for p in pairs) / w if w else 0.0
+
+
+def resolve_segments(cfg):
+    """Сводит выбранные возрастные сегменты в ОДИН взвешенный набор допущений.
+
+    Веса подобраны так, чтобы доходные компоненты маржи считались точно, а не приблизительно:
+    ставки (NIM, интерчейндж, кэшбэк, CoR) взвешиваются по базе, к которой применяются
+    (баланс или оборот), поэтому баланс_средн × NIM_средн = среднему на клиента по сегментам.
+    Приблизительными остаются отток и ramp-up — у них нет такой мультипликативной базы.
+    """
+    raw = cfg.get("audience", {}).get("segments")
+    if not raw:
+        return cfg
+    cfg = copy.deepcopy(cfg)
+    aud, fun, ue, kt = cfg["audience"], cfg["funnel"], cfg["unit_economics"], cfg["costs"]
+    product = cfg.get("meta", {}).get("product", "")
+    notes, rows = [], []
+
+    for item in raw:
+        s = {"id": item} if isinstance(item, str) else dict(item)
+        sid = s.get("id")
+        if sid not in SEGMENTS:
+            notes.append(f"ОШИБКА ВВОДА: неизвестный сегмент «{sid}». Допустимые: {', '.join(SEGMENTS)}.")
+            continue
+        meta = SEGMENTS[sid]
+        avail, lo = segment_availability(sid, product)
+        size = g(s, "target_size", aud.get("target_size", 0) if len(raw) == 1 else 0)
+        # доля сегмента, до которой инициатива физически дотягивается; по умолчанию —
+        # доля подходящих возрастов при равномерном распределении по годам
+        share = s["reachable_share"] if s.get("reachable_share") is not None else avail
+        eff = size * share
+        # доли и эффективная ЦА НЕ округляются: на них же строится лист «Сегменты» в Excel,
+        # а округление до 4 знаков разводит движок и книгу на сотни рублей NPV
+        row = {"id": sid, "name": meta["name"], "target_size": size,
+               "available_share": avail, "min_age": lo,
+               "reachable_share": share, "effective_audience": eff,
+               "organic_apps_m": g(s, "baseline_organic_apps_m",
+                                   aud.get("baseline_organic_apps_m", 0) if len(raw) == 1 else 0),
+               "approval_rate": g(s, "approval_rate", g(fun, "approval_rate", 1.0)),
+               "activation_rate": g(s, "activation_rate", g(fun, "activation_rate", 1.0)),
+               "cannibalization": g(s, "cannibalization", g(fun, "cannibalization")),
+               "deadweight": g(s, "deadweight", g(fun, "deadweight")),
+               "acq_cost_per_client": g(s, "acq_cost_per_client", g(kt, "acq_cost_per_client"))}
+        for k in ("avg_balance", "nim_annual", "monthly_turnover", "interchange_rate", "fee_income_m",
+                  "cashback_rate", "servicing_cost_m", "cor_annual", "ramp_months", "monthly_churn"):
+            row[k] = g(s, k, g(ue, k, 1.0 if k == "ramp_months" else 0.0))
+        if avail <= 0:
+            notes.append(f"СЕГМЕНТ ИСКЛЮЧЁН: «{meta['name']}» — продукт «{product}» доступен "
+                         f"только с {PRODUCT_AGE_GATE.get(product, 0)} лет, весь сегмент младше. "
+                         "Его аудитория, заявки и маржа в расчёт не попадают.")
+        elif size <= 0:
+            notes.append(f"ОШИБКА ВВОДА: у сегмента «{meta['name']}» размер ЦА = 0 — "
+                         "он не влияет на результат. Задайте target_size.")
+        elif s.get("reachable_share") is None and avail < 1:
+            notes.append(f"ДОПУЩЕНИЕ: в сегменте «{meta['name']}» продукт доступен с {lo} лет, "
+                         f"поэтому взято {avail:.0%} сегмента. Это равномерное распределение по годам — "
+                         "замените reachable_share своей демографией.")
+        if sid == "kids" and product in BRANCH_ONLY_UNDER_14:
+            notes.append(f"КАНАЛ: «{meta['name']}» — счёт и вклад до 14 лет открывает третье лицо "
+                         "в офисе по свидетельству о рождении. Заявитель — родитель, а не ребёнок: "
+                         "медийная ЦА и конверсия в заявку должны быть родительскими.")
+        rows.append(row)
+
+    live = [r for r in rows if r["effective_audience"] > 0 and r["available_share"] > 0]
+    if not live:
+        notes.append("ОШИБКА ВВОДА: ни один выбранный сегмент не даёт аудитории — считать нечего.")
+        cfg["_segments"] = {"rows": rows, "notes": notes}
+        return cfg
+    if any(r["id"] == "kids" for r in live) and any(
+            c.get("kind") == "internal" for c in cfg.get("channels", [])):
+        notes.append(f"КАНАЛ: дети до {APP_AGE} лет не имеют доступа в банковское приложение — "
+                     "push и in-app до них не доходят. Внутренние каналы бьют в родителя: "
+                     "проверьте, что reach_abs — это родительская база, а не число детей.")
+
+    # веса: аудитория → одобренные → клиенты; ставки — по базе, к которой применяются
+    for r in live:
+        r["_appr"] = r["effective_audience"] * r["approval_rate"]
+        r["_clients"] = r["_appr"] * r["activation_rate"]
+    aud_w = [(r["effective_audience"], r) for r in live]
+    appr_w = [(r["_appr"], r) for r in live]
+    cl_w = [(r["_clients"], r) for r in live]
+    bal_w = [(r["_clients"] * r["avg_balance"], r) for r in live]
+    turn_w = [(r["_clients"] * r["monthly_turnover"], r) for r in live]
+
+    aud["target_size"] = sum(r["effective_audience"] for r in live)
+    aud["baseline_organic_apps_m"] = sum(r["organic_apps_m"] for r in live)
+    fun["approval_rate"] = _wavg([(w, r["approval_rate"]) for w, r in aud_w])
+    fun["activation_rate"] = _wavg([(w, r["activation_rate"]) for w, r in appr_w])
+    for k in ("cannibalization", "deadweight"):
+        fun[k] = _wavg([(w, r[k]) for w, r in cl_w])
+    for k in ("avg_balance", "monthly_turnover", "fee_income_m", "servicing_cost_m",
+              "ramp_months", "monthly_churn"):
+        ue[k] = _wavg([(w, r[k]) for w, r in cl_w])
+    for k, base in (("nim_annual", bal_w), ("cor_annual", bal_w),
+                    ("interchange_rate", turn_w), ("cashback_rate", turn_w)):
+        ue[k] = _wavg([(w, r[k]) for w, r in base])
+    kt["acq_cost_per_client"] = _wavg([(w, r["acq_cost_per_client"]) for w, r in cl_w])
+
+    total = sum(r["_clients"] for r in live)
+    for r in rows:
+        r["client_weight"] = round(r.get("_clients", 0) / total, 4) if total else 0
+        r.pop("_appr", None); r.pop("_clients", None)
+    cfg["_segments"] = {"rows": rows, "notes": notes,
+                        "effective_audience_total": aud["target_size"]}
+    return cfg
+
+
+def load_config(src):
+    """Читает кейс и сводит сегменты. Единственная точка входа для конфига."""
+    cfg = json.load(open(src, encoding="utf-8")) if src else json.load(sys.stdin)
+    return resolve_segments(cfg)
+
+
 def poisson_reach(impressions, audience):
     """Reach(1+) = 1 - e^(-lambda), где lambda = средняя частота контакта на человека в ЦА."""
     if audience <= 0 or impressions <= 0:
@@ -206,7 +354,7 @@ def frk_ladder(cfg):
 
 def validate(cfg, f, pl):
     """Проверки ВВОДНЫХ: ловят случаи, где модель считает без ошибок, но молча теряет часть эффекта."""
-    out = []
+    out = list(cfg.get("_segments", {}).get("notes", []))
     h = int(g(cfg["meta"], "horizon_months", 24)); cm = int(max(g(cfg["costs"], "campaign_months", 1), 1))
     if h < cm:
         out.append(f"ОШИБКА ВВОДА: горизонт {h} мес короче кампании {cm} мес. "
@@ -271,10 +419,10 @@ def confidence_index(cfg):
 
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else None
-    cfg = json.load(open(src, encoding="utf-8")) if src else json.load(sys.stdin)
+    cfg = load_config(src)
     funnel, pl = evaluate(cfg)
     view = {k: v for k, v in funnel.items() if not k.startswith("_")}
-    res = {"meta": cfg.get("meta", {}), "funnel": view,
+    res = {"meta": cfg.get("meta", {}), "segments": cfg.get("_segments"), "funnel": view,
            "pl": {k: v for k, v in pl.items() if k != "monthly"}, "monthly": pl["monthly"],
            "scenarios": {}, "tornado": tornado(cfg, pl["npv"]),
            "rice": rice_score(cfg, funnel["_incremental_raw"], pl["npv"]),

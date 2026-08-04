@@ -1,0 +1,130 @@
+{
+  "meta": {
+    "name": "Молодёжная карта — дети, подростки, молодёжь",
+    "type": "product_launch",
+    "product": "card",
+    "horizon_months": 36,
+    "discount_rate_annual": 0.2
+  },
+  "audience": {
+    "segments": [
+      {
+        "id": "kids",
+        "target_size": 3000000,
+        "baseline_organic_apps_m": 2500,
+        "approval_rate": 0.98,
+        "activation_rate": 0.45,
+        "cannibalization": 0.05,
+        "avg_balance": 4000,
+        "nim_annual": 0.02,
+        "monthly_turnover": 2500,
+        "interchange_rate": 0.012,
+        "cashback_rate": 0.005,
+        "servicing_cost_m": 40,
+        "ramp_months": 4,
+        "monthly_churn": 0.02
+      },
+      {
+        "id": "teens",
+        "target_size": 2200000,
+        "baseline_organic_apps_m": 6000,
+        "approval_rate": 0.95,
+        "activation_rate": 0.6,
+        "cannibalization": 0.12,
+        "avg_balance": 9000,
+        "nim_annual": 0.03,
+        "monthly_turnover": 7000,
+        "interchange_rate": 0.012,
+        "cashback_rate": 0.006,
+        "servicing_cost_m": 55,
+        "ramp_months": 3,
+        "monthly_churn": 0.03
+      },
+      {
+        "id": "youth",
+        "target_size": 9500000,
+        "baseline_organic_apps_m": 22000,
+        "approval_rate": 0.85,
+        "activation_rate": 0.65,
+        "cannibalization": 0.25,
+        "avg_balance": 28000,
+        "nim_annual": 0.06,
+        "monthly_turnover": 21000,
+        "interchange_rate": 0.011,
+        "cashback_rate": 0.006,
+        "servicing_cost_m": 70,
+        "ramp_months": 3,
+        "monthly_churn": 0.04
+      }
+    ],
+    "halo_months": 2,
+    "halo_decay": 0.5
+  },
+  "channels": [
+    {
+      "name": "Родительское приложение (push/in-app)",
+      "kind": "internal",
+      "reach_abs": 4000000,
+      "budget": 0,
+      "response_rate": 0.018,
+      "cr_to_app": 0.22,
+      "frk_tier": 4
+    },
+    {
+      "name": "Перформанс",
+      "kind": "perform",
+      "budget": 25000000,
+      "cpm": 380,
+      "ctr": 0.007,
+      "cr_to_app": 0.035,
+      "frk_tier": 4
+    },
+    {
+      "name": "Внешние посевы (блогеры)",
+      "kind": "perform",
+      "budget": 15000000,
+      "cpm": 260,
+      "ctr": 0.005,
+      "cr_to_app": 0.025,
+      "frk_tier": 3
+    }
+  ],
+  "funnel": {
+    "approval_rate": 0.9,
+    "activation_rate": 0.6,
+    "cannibalization": 0.15,
+    "deadweight": 0.0
+  },
+  "unit_economics": {
+    "avg_balance": 15000,
+    "nim_annual": 0.04,
+    "monthly_turnover": 10000,
+    "interchange_rate": 0.011,
+    "fee_income_m": 0,
+    "cashback_rate": 0.006,
+    "servicing_cost_m": 60,
+    "cor_annual": 0.0,
+    "ramp_months": 3,
+    "monthly_churn": 0.035
+  },
+  "costs": {
+    "production": 12000000,
+    "it_dev": 35000000,
+    "campaign_months": 3,
+    "opex_monthly": 900000,
+    "one_off_other": 0,
+    "acq_cost_per_client": 0
+  },
+  "rice": {
+    "reach": 0,
+    "impact": 2,
+    "confidence": 0.5,
+    "effort": 18
+  },
+  "confidence": {
+    "A": 2,
+    "B": 4,
+    "C": 8,
+    "D": 6
+  }
+}

@@ -167,7 +167,85 @@ check("Выплаты считаются от активированных, а �
 check("Выплата на инкрементального клиента выше номинала при каннибализации",
       p_a["payout_per_incremental_client"] > 1000)
 
-# ---------------------------------------------------------------- 8. Все кейсы считаются
+# ---------------------------------------------------------------- 8. Возрастные сегменты
+SEG_CASE = json.loads((CASES / "youth_card_segments.json").read_text(encoding="utf-8"))
+
+def seg_cfg(**patch):
+    c = copy.deepcopy(SEG_CASE)
+    c["meta"].update(patch.pop("meta", {}))
+    c["audience"].update(patch)
+    return calc.resolve_segments(c)
+
+# один сегмент со своими параметрами обязан дать ровно то же, что тот же конфиг без сегментов
+one = copy.deepcopy(SEG_CASE)
+youth = next(s for s in one["audience"]["segments"] if s["id"] == "youth")
+one["audience"]["segments"] = [youth]
+res_seg = run(calc.resolve_segments(one))
+flat = copy.deepcopy(SEG_CASE)
+flat["audience"] = {k: v for k, v in flat["audience"].items() if k != "segments"}
+flat["audience"]["target_size"] = youth["target_size"]
+flat["audience"]["baseline_organic_apps_m"] = youth["baseline_organic_apps_m"]
+for k in ("approval_rate", "activation_rate", "cannibalization"):
+    flat["funnel"][k] = youth[k]
+for k in ("avg_balance", "nim_annual", "monthly_turnover", "interchange_rate",
+          "cashback_rate", "servicing_cost_m", "ramp_months", "monthly_churn"):
+    flat["unit_economics"][k] = youth[k]
+res_flat = run(flat)
+check("Один сегмент = тот же конфиг без сегментов",
+      abs(res_seg[1]["npv"] - res_flat[1]["npv"]) < 1 and
+      res_seg[0]["incremental_clients"] == res_flat[0]["incremental_clients"],
+      f'NPV {res_seg[1]["npv"]:,} vs {res_flat[1]["npv"]:,}')
+
+# ставки взвешиваются по своей базе, поэтому доходные компоненты маржи считаются ТОЧНО,
+# а не приблизительно: средний_баланс × средний_NIM = среднему на клиента по сегментам
+seg = calc.resolve_segments(copy.deepcopy(SEG_CASE))
+rows = [r for r in seg["_segments"]["rows"] if r["effective_audience"] > 0]
+w = [r["effective_audience"] * r["approval_rate"] * r["activation_rate"] for r in rows]
+exact_nim = sum(x * r["avg_balance"] * r["nim_annual"] for x, r in zip(w, rows)) / sum(w)
+exact_ic = sum(x * r["monthly_turnover"] * r["interchange_rate"] for x, r in zip(w, rows)) / sum(w)
+u = seg["unit_economics"]
+check("Взвешенный NIM точен: баланс × NIM = среднему по сегментам",
+      abs(u["avg_balance"] * u["nim_annual"] - exact_nim) < 1e-6,
+      f'{u["avg_balance"] * u["nim_annual"]:.4f} vs {exact_nim:.4f}')
+check("Взвешенный интерчейндж точен",
+      abs(u["monthly_turnover"] * u["interchange_rate"] - exact_ic) < 1e-6)
+check("Веса клиентов суммируются в единицу",
+      abs(sum(r["client_weight"] for r in seg["_segments"]["rows"]) - 1) < 0.001)
+
+# возрастные ограничения продукта
+credit = seg_cfg(meta={"product": "credit"})
+excluded = [r for r in credit["_segments"]["rows"] if r["available_share"] == 0]
+check("Кредитный продукт исключает детей и подростков",
+      {r["id"] for r in excluded} == {"kids", "teens"},
+      f'исключены {[r["id"] for r in excluded]}')
+check("Исключение сегмента объясняется в валидации",
+      any("СЕГМЕНТ ИСКЛЮЧЁН" in n for n in credit["_segments"]["notes"]))
+check("Кредит: аудитория схлопывается до молодёжи",
+      credit["audience"]["target_size"] == next(
+          s["target_size"] for s in SEG_CASE["audience"]["segments"] if s["id"] == "youth"))
+
+check("Карта детям доступна с 6 лет — 8 возрастов из 14",
+      abs(calc.segment_availability("kids", "card")[0] - 8 / 14) < 1e-9)
+check("Вклад детям доступен с рождения",
+      calc.segment_availability("kids", "deposit") == (1.0, 0))
+check("Брокерский счёт детям недоступен полностью",
+      calc.segment_availability("kids", "broker")[0] == 0)
+check("Подросткам подписка и лояльность доступны",
+      calc.segment_availability("teens", "prime")[0] == 1.0 and
+      calc.segment_availability("teens", "loyalty")[0] == 1.0)
+
+deposit = seg_cfg(meta={"product": "deposit"})
+check("Вклад детям: предупреждение про офис и третье лицо",
+      any("офисе по свидетельству о рождении" in n for n in deposit["_segments"]["notes"]))
+check("Дети + внутренние каналы: предупреждение про доступ в приложение",
+      any("не имеют доступа в банковское приложение" in n
+          for n in seg["_segments"]["notes"]))
+
+bad = seg_cfg(segments=[{"id": "adults", "target_size": 1000}])
+check("Неизвестный сегмент отлавливается",
+      any("неизвестный сегмент" in n.lower() for n in bad["_segments"]["notes"]))
+
+# ---------------------------------------------------------------- 9. Все кейсы считаются
 for path in sorted(CASES.glob("*.json")):
     try:
         r = engine(path)
