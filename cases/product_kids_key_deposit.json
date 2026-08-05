@@ -18,7 +18,8 @@
         "activation_rate": 0.45,
         "cannibalization": 0.05,
         "monthly_churn": 0.02,
-        "existing_clients": 5050000
+        "existing_clients": 5050000,
+        "operating_income_annual": 2628.0
       },
       {
         "id": "teens",

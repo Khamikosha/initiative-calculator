@@ -14,6 +14,10 @@ CASES = ROOT / "cases"
 spec = importlib.util.spec_from_file_location("calc", ENGINE)
 calc = importlib.util.module_from_spec(spec); spec.loader.exec_module(calc)
 
+# реестр нужен с самого начала: возрастные правила и ОД проверяются вперемешку с движком
+_ps = importlib.util.spec_from_file_location("params", ROOT / "src" / "params.py")
+prm = importlib.util.module_from_spec(_ps); _ps.loader.exec_module(prm)
+
 BASE = json.loads((CASES / "frk1_debit_card.json").read_text(encoding="utf-8"))
 ok, fail = [], []
 
@@ -384,12 +388,17 @@ check("Молодёжный вклад — с 14: дети исключены",
       calc.segment_availability("kids", "youth_deposit")[0] == 0)
 check("Родовая карта осталась без верхней границы",
       calc.segment_availability("youth", "card")[0] == 1.0)
+# Правило банка: вклад ребёнку открывает родитель в офисе с рождения, а карту сам
+# ребёнок получает с 6 лет. Поэтому у вклада и карты одного возраста разные пороги.
+check("Детский вклад доступен с рождения, детская карта — с 6 лет",
+      calc.PRODUCT_AGE["kids_deposit"][0] == 0 and calc.PRODUCT_AGE["kids_card"][0] == 6 and
+      calc.segment_availability("kids", "kids_deposit")[0] == 1.0 and
+      abs(calc.segment_availability("kids", "kids_card")[0] - 8 / 14) < 1e-9)
+check("У продукта с рождения рынок помечен как неполный: по 0–5 его не присылали",
+      prm.segment_defaults("kids", "kids_deposit")["market_partial"] == list(range(0, 6)) and
+      prm.segment_defaults("kids", "kids_card")["market_partial"] is None)
 
 # ------------------------------- 15. Эффект в разных валютах (АКБ, ОД, AUM, PL)
-import importlib.util as _il
-_ps = _il.spec_from_file_location("params", ROOT / "src" / "params.py")
-prm = _il.module_from_spec(_ps); _ps.loader.exec_module(prm)
-
 check("«Итого» исходной таблицы ОД везде равно сумме БЕЗ ипотеки",
       all(abs(sum(prm.OD_BY_AGE[l][i] for l in prm.OD_BY_AGE if l != "ипотека")
               - tot) < 0.01
@@ -401,8 +410,11 @@ check("Ипотека по умолчанию не входит в ОД сегм
 check("ОД сегмента считается только по его возрастам",
       prm.od_per_client("teens") < prm.od_per_client("youth"),
       f'подростки {prm.od_per_client("teens"):.0f} ₽ < молодёжь {prm.od_per_client("youth"):.0f} ₽')
-check("У детей данных по ОД нет — возвращается None, а не ноль",
-      prm.od_per_client("kids") is None)
+check("ОД детей взят из средней суммы: детальной разбивки по линиям для них нет",
+      abs(prm.od_per_client("kids") - prm.OD_KIDS_MONTHLY * 12) < 1,
+      f'{prm.od_per_client("kids"):.0f} ₽/год = {prm.OD_KIDS_MONTHLY} ₽/мес × 12')
+check("Разбивку по продуктовым линиям у детей не выдумываем",
+      prm.od_per_client("kids", lines=["дебетовая карта"]) is None)
 
 _e = calc.analyze(calc.resolve_segments(json.loads(
     (CASES / "product_youth_deposit.json").read_text(encoding="utf-8"))))["pl"]["effect"]
@@ -488,8 +500,10 @@ check("Каналы есть, но конверсия нулевая — тож�
 # ------------------------------- 18. Отсутствие ОД не молчит
 # Живой тест: на детском вкладе эффект в ОД остался пустым, и человек не мог понять,
 # это ноль эффекта или отсутствие данных. Таблица ОД начинается с 14 лет.
-kids_case = json.loads((CASES / "product_kids_deposit.json").read_text(encoding="utf-8"))
-r_kids = calc.analyze(calc.resolve_segments(kids_case))
+no_od = json.loads((CASES / "product_kids_deposit.json").read_text(encoding="utf-8"))
+for _s in no_od["audience"]["segments"]:
+    _s.pop("operating_income_annual", None)
+r_kids = calc.analyze(calc.resolve_segments(no_od))
 check("Отсутствие данных по ОД объясняется, а не молчит",
       any("ДАННЫХ НЕТ" in m and "Дети" in m for m in r_kids["validation"]))
 check("ОД пустой, а не нулевой — разницу видно",

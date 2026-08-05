@@ -26,7 +26,8 @@
         "servicing_cost_m": 40,
         "ramp_months": 4,
         "monthly_churn": 0.02,
-        "existing_clients": 5050000
+        "existing_clients": 5050000,
+        "operating_income_annual": 2628.0
       },
       {
         "id": "teens",

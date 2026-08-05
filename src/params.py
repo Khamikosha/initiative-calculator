@@ -168,6 +168,17 @@ OD_BY_AGE = {
 }
 OD_EXCLUDED_BY_DEFAULT = ("ипотека",)
 
+# По детским возрастам известен только средний ОД целиком, без разбивки по линиям:
+# 219 ₽ в месяц на клиента. Держим ОТДЕЛЬНО от OD_BY_AGE намеренно — иначе таблица
+# создавала бы видимость детализации, которой нет.
+#
+# Заодно эта цифра подтверждает единицу измерения основной таблицы: 219 × 12 = 2 628 ₽
+# в год ложится вплотную к 2 514 ₽ у четырнадцатилетних. Значит там годовые суммы,
+# а не месячные. И объясняет провал на переходе 17 → 18: у ребёнка ОД держится на
+# родительских деньгах, а не на его собственных.
+OD_KIDS_MONTHLY = 219
+OD_FLAT_ANNUAL = {a: OD_KIDS_MONTHLY * 12 for a in range(0, 14)}
+
 
 # ------------------------------------------------------------ КЛИЕНТЫ ПО ГОДАМ ЖИЗНИ
 # Клиентская база банка по годам жизни, чел. Свой факт — грейд A.
@@ -186,7 +197,13 @@ AGE_CLIENTS = {
     22: 1_376_400, 23: 1_348_500, 24: 1_274_100,
 }
 # Размер рынка по подсегментам, чел. Разбивки по годам нет — считаем равномерной.
+#
+# Возрастов 0–5 здесь НЕТ: рынок по ним не присылали. Клиенты по ним есть (50 тыс.),
+# поэтому у продукта, доступного с рождения, числитель проникновения шире знаменателя
+# примерно на 1%. Погрешность мелкая, но она есть — `segment_defaults()` помечает такие
+# случаи полем `market_partial`, чтобы это не выглядело точной цифрой.
 MARKET_BY_AGES = {(6, 13): 11_000_000, (14, 17): 6_000_000, (18, 24): 10_500_000}
+MARKET_KNOWN_AGES = {a for lo, hi in MARKET_BY_AGES for a in range(lo, hi + 1)}
 
 
 def segment_ages(segment_id):
@@ -229,19 +246,17 @@ def od_per_client(segment_id, lines=None, include_mortgage=False):
     поправка мелкая (+1,0% у подростков, +0,1% у молодёжи) — распределение почти ровное.
     Но это уже свой факт, а не допущение, и грейд источника поднимается с C до A.
     """
-    seg = calc.SEGMENTS[segment_id]
-    ages = [a for a in OD_AGES if seg["age_min"] <= a <= seg["age_max"]]
-    if not ages:
-        return None
-    if lines is None:
-        lines = [k for k in OD_BY_AGE
-                 if include_mortgage or k not in OD_EXCLUDED_BY_DEFAULT]
-    idx = {a: i for i, a in enumerate(OD_AGES)}
-    weights = [AGE_CLIENTS.get(a, 0) for a in ages]
-    if not sum(weights):
-        weights = [1] * len(ages)
-    return (sum(sum(OD_BY_AGE[l][idx[a]] for l in lines) * w for a, w in zip(ages, weights))
-            / sum(weights))
+    ages = segment_ages(segment_id)
+    if lines is not None:
+        # разбивка по линиям есть только в детальной таблице 14–24
+        idx = {a: i for i, a in enumerate(OD_AGES)}
+        have = [a for a in ages if a in idx]
+        if not have:
+            return None
+        w = [AGE_CLIENTS.get(a, 0) or 1 for a in have]
+        return (sum(sum(OD_BY_AGE[l][idx[a]] for l in lines) * wi for a, wi in zip(have, w))
+                / sum(w))
+    return od_for_ages(ages, include_mortgage)
 
 
 def od_breakdown(segment_id, include_mortgage=False):
@@ -285,15 +300,23 @@ def market_for_ages(ages):
 
 
 def od_for_ages(ages, include_mortgage=False):
-    """ОД на клиента в год для набора возрастов, взвешенный по числу клиентов."""
+    """ОД на клиента в год для набора возрастов, взвешенный по числу клиентов.
+
+    Два источника разной точности: по 14–24 есть разбивка по продуктовым линиям,
+    по младшим возрастам — только средняя сумма. Берём что есть, приоритет у детального.
+    """
     idx = {a: i for i, a in enumerate(OD_AGES)}
-    have = [a for a in ages if a in idx]
-    if not have:
-        return None
     lines = [k for k in OD_BY_AGE if include_mortgage or k not in OD_EXCLUDED_BY_DEFAULT]
-    w = [AGE_CLIENTS.get(a, 0) or 1 for a in have]
-    return (sum(sum(OD_BY_AGE[l][idx[a]] for l in lines) * wi for a, wi in zip(have, w))
-            / sum(w))
+    vals = {}
+    for a in ages:
+        if a in idx:
+            vals[a] = sum(OD_BY_AGE[l][idx[a]] for l in lines)
+        elif a in OD_FLAT_ANNUAL:
+            vals[a] = OD_FLAT_ANNUAL[a]
+    if not vals:
+        return None
+    w = {a: AGE_CLIENTS.get(a, 0) or 1 for a in vals}
+    return sum(vals[a] * w[a] for a in vals) / sum(w.values())
 
 
 def segment_defaults(segment_id, product_id):
@@ -314,11 +337,14 @@ def segment_defaults(segment_id, product_id):
         return None
     market = market_for_ages(ages)
     clients = sum(AGE_CLIENTS.get(a, 0) for a in ages)
+    blind = sorted(set(ages) - MARKET_KNOWN_AGES)
     return {
         "ages": (ages[0], ages[-1]),
         "target_size": market,
         "existing_clients": clients or None,
         "penetration": (clients / market) if market and clients else None,
+        # возрасты, где клиенты есть, а рынок неизвестен: проникновение слегка завышено
+        "market_partial": blind or None,
         "reachable_share": 1.0,
         "value_per_client": product_values(product_id).get(segment_id),
         "operating_income_annual": od_for_ages(ages),

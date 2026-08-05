@@ -30,10 +30,13 @@ PRODUCT_AGE = {
     "account": (0, None), "deposit": (0, None), "piggy_bank": (6, None), "card": (6, None),
     "savings": (14, None), "broker": (14, None), "prime": (14, None), "loyalty": (14, None),
     "credit": (18, None), "ecosystem": (18, None),
-    # именные продукты линейки — рамки свои и у́же родовой категории
+    # Именные продукты линейки — рамки свои и у́же родовой категории.
+    # Детские ВКЛАДЫ доступны с рождения: до 14 лет их открывает родитель в офисе
+    # по свидетельству о рождении. Детская КАРТА — только с 6 лет, ею пользуется
+    # сам ребёнок. Отсюда разные нижние границы у карты и вкладов одного возраста.
     "kids_card": (6, 13),
-    "kids_deposit": (6, 13),
-    "kids_key_deposit": (6, 17),
+    "kids_deposit": (0, 13),
+    "kids_key_deposit": (0, 17),
     "youth_deposit": (14, None),
 }
 PRODUCT_AGE_GATE = {k: lo for k, (lo, _) in PRODUCT_AGE.items()}   # только нижний порог
