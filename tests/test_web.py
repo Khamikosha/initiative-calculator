@@ -25,6 +25,7 @@ from web import db as _db                                        # noqa: E402
 _db.DB_PATH = Path(os.environ["CALC_DB"])
 
 from fastapi.testclient import TestClient                        # noqa: E402
+from web import app as app_mod                                   # noqa: E402
 from web.app import app, calc, params                            # noqa: E402
 
 client = TestClient(app)
@@ -72,6 +73,43 @@ _main2, _rest2 = params.split_by_type(params.COSTS, "comms", {"costs": {"it_dev"
 check("Ненулевое «нерелевантное» значение остаётся на виду — деньги всё равно считаются",
       "it_dev" in {p.key for p in _main2},
       "50 млн на IT при типе comms не прячутся под раскрытие")
+
+# ------------------------------------------- 1в. Подстановка из реестра и каталога
+# Живой тест вскрыл две ошибки ввода подряд: человек вручную вписал базу 6–13 в поле,
+# которое движок понимает как рынок сегмента 0–13 (двойная возрастная отсечка), и получил
+# вклад, посчитанный по дефолтам дебетовой карты. Оба ввода теперь не нужны.
+_d = params.segment_defaults("kids", "kids_key_deposit")
+check("Рынок берётся по возрастам, где продукт доступен",
+      _d["ages"] == (6, 13) and _d["target_size"] == 11_000_000)
+check("Достижимая доля = 1: возрастное правило уже в числителе, второй раз не режем",
+      _d["reachable_share"] == 1.0,
+      "иначе 11 млн превратились бы в 6,3 млн")
+check("Число клиентов и проникновение подставляются из реестра",
+      _d["existing_clients"] == 5_000_000 and abs(_d["penetration"] - 5 / 11) < 0.01)
+check("Ценность клиента берётся из каталога продукта",
+      _d["value_per_client"] == 14670)
+check("У продукта без каталожной ценности режим остаётся build_up",
+      params.product_economics("card")["mode"] == "build_up" and
+      params.product_economics("kids_key_deposit")["mode"] == "value_per_client")
+check("Недоступный сегмент не получает дефолтов вовсе",
+      params.segment_defaults("youth", "kids_card") is None)
+
+_cfg = app_mod.apply_product_economics(params.defaults(), "kids_key_deposit")
+check("Горизонт и ставка приходят из модели продукта",
+      _cfg["meta"]["horizon_months"] == 36 and _cfg["meta"]["discount_rate_annual"] == 0.2)
+check("Строки маржи снизу вверх обнуляются — иначе движок ругается в каждом прогоне",
+      all(_cfg["unit_economics"][k] == 0 for k in
+          ("nim_annual", "monthly_turnover", "interchange_rate", "cashback_rate",
+           "servicing_cost_m", "cor_annual")))
+check("Средний баланс сохраняется: он остаётся источником AUM",
+      _cfg["unit_economics"]["avg_balance"] > 0)
+
+_cfg2 = {"audience": {"segments": [{"id": "kids", "target_size": 999}]}}
+app_mod.apply_segment_defaults(_cfg2, "kids_key_deposit")
+_seg = _cfg2["audience"]["segments"][0]
+check("Введённое руками не затирается подстановкой",
+      _seg["target_size"] == 999 and _seg["value_per_client"] == 14670,
+      "рынок остался пользовательским, ценность подставилась")
 
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)

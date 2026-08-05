@@ -264,6 +264,76 @@ def product_segments(product_id):
     return [sid for sid in calc.SEGMENTS
             if calc.segment_availability(sid, product_id)[0] > 0]
 
+
+def overlap_ages(segment_id, product_id):
+    """Годы жизни, где сегмент и возрастная вилка продукта пересекаются."""
+    seg = calc.SEGMENTS[segment_id]
+    lo, hi = product_age(product_id)
+    top = seg["age_max"] if hi is None else min(seg["age_max"], hi)
+    return list(range(max(seg["age_min"], lo), top + 1))
+
+
+def market_for_ages(ages):
+    """Рынок для набора возрастов. Внутри подсегмента рынок считаем равномерным по годам."""
+    ages = set(ages)
+    total = 0.0
+    for (lo, hi), size in MARKET_BY_AGES.items():
+        span = [a for a in range(lo, hi + 1) if a in ages]
+        if span:
+            total += size * len(span) / (hi - lo + 1)
+    return total or None
+
+
+def od_for_ages(ages, include_mortgage=False):
+    """ОД на клиента в год для набора возрастов, взвешенный по числу клиентов."""
+    idx = {a: i for i, a in enumerate(OD_AGES)}
+    have = [a for a in ages if a in idx]
+    if not have:
+        return None
+    lines = [k for k in OD_BY_AGE if include_mortgage or k not in OD_EXCLUDED_BY_DEFAULT]
+    w = [AGE_CLIENTS.get(a, 0) or 1 for a in have]
+    return (sum(sum(OD_BY_AGE[l][idx[a]] for l in lines) * wi for a, wi in zip(have, w))
+            / sum(w))
+
+
+def segment_defaults(segment_id, product_id):
+    """Всё, что известно про сегмент и продукт ДО ввода пользователя.
+
+    Ключевая тонкость — что считать размером сегмента. Модель понимает `target_size`
+    как ЦА, которую потом режет `reachable_share`. Если подставить рынок всего сегмента
+    (0–13) и оставить долю по возрастам, получится одна отсечка; если подставить рынок
+    доступных возрастов (6–13) и не поправить долю — отсечка применится второй раз,
+    и сегмент похудеет вдвое. Так и произошло на первом живом тесте.
+
+    Поэтому здесь одно согласованное решение: `target_size` — это рынок ИМЕННО тех
+    возрастов, где продукт доступен, а `reachable_share` = 1. Возрастное правило уже
+    учтено в числителе, повторно его применять не надо.
+    """
+    ages = overlap_ages(segment_id, product_id)
+    if not ages:
+        return None
+    market = market_for_ages(ages)
+    clients = sum(AGE_CLIENTS.get(a, 0) for a in ages)
+    return {
+        "ages": (ages[0], ages[-1]),
+        "target_size": market,
+        "existing_clients": clients or None,
+        "penetration": (clients / market) if market and clients else None,
+        "reachable_share": 1.0,
+        "value_per_client": product_values(product_id).get(segment_id),
+        "operating_income_annual": od_for_ages(ages),
+    }
+
+
+def product_economics(product_id):
+    """Режим экономики и горизонт, вытекающие из каталога продукта."""
+    if not product_values(product_id):
+        return {"mode": calc.MODE_BUILD_UP}
+    return {"mode": calc.MODE_VALUE,
+            "value_horizon_months": VALUE_HORIZON_MONTHS,
+            "discount_rate_annual": VALUE_RATE_ANNUAL,
+            "horizon_months": VALUE_HORIZON_MONTHS}
+
 BRAND_TYPES = tuple(k for k, v in INITIATIVE_TYPES.items() if "brand" in v["kinds"])
 FRK_TYPES = ("frk4", "frk3", "frk2", "frk1")
 

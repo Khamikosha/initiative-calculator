@@ -645,7 +645,9 @@ def validate(cfg, f, pl):
             out.append("ВНИМАНИЕ: отток = 0. На NPV это не влияет (отток внутри ценности клиента), "
                        "но АКБ, ОД и AUM считаются по активной базе — при нулевом оттоке она "
                        "не убывает, и эти три цифры завышены. Задайте отток хотя бы 1–2% в месяц.")
-        stale = [k for k in ("avg_balance", "monthly_turnover", "nim_annual", "interchange_rate",
+        # Средний баланс из списка исключён намеренно: маржи он здесь не даёт, но остаётся
+        # единственным источником AUM и дополнительного объёма средств.
+        stale = [k for k in ("monthly_turnover", "nim_annual", "interchange_rate",
                              "cashback_rate", "servicing_cost_m", "cor_annual") if g(u, k)]
         if stale:
             out.append(f"ВНИМАНИЕ: в режиме ценности клиента не участвуют {', '.join(stale)} — "

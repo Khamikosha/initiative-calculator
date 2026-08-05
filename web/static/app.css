@@ -106,8 +106,8 @@ input.key { background: var(--key); border-color: var(--key-line); }
 .seg.on { border-color: var(--accent); background: #fbfcfe; }
 .seg-head { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .seg-head input { width: auto; }
-.seg-body { display: none; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 12px; }
-.seg.on .seg-body { display: grid; }
+.seg-body { display: none; margin-top: 12px; }
+.seg.on .seg-body { display: block; }
 .gate { font-size: 13px; color: var(--muted); }
 .gate.off { color: var(--bad); }
 
@@ -174,3 +174,17 @@ footer {
 }
 .rest[open] > summary { margin-bottom: 8px; }
 .rest table.params { opacity: .75; }
+
+/* известные из реестра величины — показываем, а не спрашиваем */
+.known {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+  background: #f4f7fb; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px;
+}
+.known > div span { display: block; color: var(--muted); font-size: 12px; }
+.known > div b { font-size: 16px; }
+.warn-txt { color: var(--warn); }
+.seg.off { opacity: .55; }
+.seg.off .seg-head { cursor: not-allowed; }
+.field.need > span em { font-style: normal; color: var(--warn); font-weight: 400; font-size: 13px; }
+.field.need input { border-color: var(--key-line); background: var(--key); }
+.callout.ok { background: #eef7f0; border-color: var(--good); }

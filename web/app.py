@@ -170,6 +170,51 @@ def form_to_config(form, cfg):
     return cfg
 
 
+def apply_product_economics(cfg, product):
+    """Режим экономики и горизонт из каталога продукта.
+
+    Вызывается на ДВУХ явных событиях — создание инициативы и смена продукта, — а не
+    при каждом сохранении. Причина: `config_of()` заливает конфиг дефолтами реестра,
+    поэтому «поле пустое» отличить от «поле равно дефолту» уже нельзя, и подстановка
+    при каждом сохранении затирала бы то, что человек поправил руками.
+    """
+    econ = params.product_economics(product)
+    ue = cfg.setdefault("unit_economics", {})
+    ue["mode"] = econ["mode"]
+    if econ["mode"] == calc.MODE_VALUE:
+        # Горизонт и ставка идут из модели продукта: ценность посчитана именно на них,
+        # и расхождение сделало бы затраты и доходы несопоставимыми.
+        ue["value_horizon_months"] = econ["value_horizon_months"]
+        meta = cfg.setdefault("meta", {})
+        meta["horizon_months"] = econ["horizon_months"]
+        meta["discount_rate_annual"] = econ["discount_rate_annual"]
+        # Обнуляем то, что собирало бы маржу снизу вверх: иначе дефолты дебетовой карты
+        # остаются в конфиге вклада и движок в каждом прогоне честно предупреждает, что
+        # они не участвуют. Средний баланс не трогаем — в этом режиме он больше не даёт
+        # маржи, но по-прежнему нужен для AUM.
+        for key in ("nim_annual", "monthly_turnover", "interchange_rate", "fee_income_m",
+                    "cashback_rate", "servicing_cost_m", "cor_annual"):
+            ue[key] = 0
+    return cfg
+
+
+def apply_segment_defaults(cfg, product):
+    """Заполняет по каждому сегменту то, что известно из реестра, не трогая введённое.
+
+    Сегменты хранят только явно заданные ключи (`form_to_config` удаляет очищенные),
+    поэтому здесь «нет ключа» честно означает «человек не вводил».
+    """
+    for seg in cfg.get("audience", {}).get("segments") or []:
+        d = params.segment_defaults(seg.get("id"), product)
+        if not d:
+            continue
+        for key in ("target_size", "existing_clients", "reachable_share",
+                    "value_per_client", "operating_income_annual"):
+            if d.get(key) is not None and seg.get(key) in (None, ""):
+                seg[key] = d[key]
+    return cfg
+
+
 def config_of(init):
     cfg = json.loads(init["config_json"] or "{}")
     base = params.defaults()
@@ -214,10 +259,11 @@ def new_form(request: Request):
 async def new_save(request: Request):
     f = await request.form()
     name = (f.get("name") or "").strip() or "Без названия"
+    product = f.get("product") or "card"
     iid = db.create_initiative(
-        con, author_of(request), name,
-        f.get("type") or "frk4", f.get("product") or "card",
-        (f.get("description") or "").strip(), params.defaults())
+        con, author_of(request), name, f.get("type") or "frk4", product,
+        (f.get("description") or "").strip(),
+        apply_product_economics(params.defaults(), product))
     return RedirectResponse(f"/initiative/{iid}/segments", status_code=303)
 
 
@@ -230,9 +276,20 @@ def edit_form(request: Request, iid: int):
 @app.post("/initiative/{iid}/edit")
 async def edit_save(request: Request, iid: int):
     f = await request.form()
-    db.update_initiative(con, iid, name=(f.get("name") or "").strip() or "Без названия",
-                         type=f.get("type") or "frk4", product=f.get("product") or "card",
-                         description=(f.get("description") or "").strip())
+    init = db.get_initiative(con, iid)
+    product = f.get("product") or "card"
+    fields = dict(name=(f.get("name") or "").strip() or "Без названия",
+                  type=f.get("type") or "frk4", product=product,
+                  description=(f.get("description") or "").strip())
+    if product != init["product"]:
+        # продукт сменился — прежняя экономика относилась к другому продукту
+        cfg = apply_product_economics(config_of(init), product)
+        for seg in cfg.get("audience", {}).get("segments") or []:
+            for key in ("target_size", "existing_clients", "reachable_share",
+                        "value_per_client", "operating_income_annual"):
+                seg.pop(key, None)
+        fields["config"] = apply_segment_defaults(cfg, product)
+    db.update_initiative(con, iid, **fields)
     return RedirectResponse(f"/initiative/{iid}/segments", status_code=303)
 
 
@@ -248,13 +305,16 @@ def segments_form(request: Request, iid: int):
     init = db.get_initiative(con, iid)
     cfg = config_of(init)
     chosen = {s["id"]: s for s in (cfg.get("audience", {}).get("segments") or [])}
-    return page(request, "segments.html", init=init, cfg=cfg, chosen=chosen, step="segments")
+    known = {sid: params.segment_defaults(sid, init["product"]) for sid in calc.SEGMENTS}
+    return page(request, "segments.html", init=init, cfg=cfg, chosen=chosen, step="segments",
+                known=known, has_value=bool(params.product_values(init["product"])))
 
 
 @app.post("/initiative/{iid}/segments")
 async def segments_save(request: Request, iid: int):
     init = db.get_initiative(con, iid)
     cfg = form_to_config(await request.form(), config_of(init))
+    cfg = apply_segment_defaults(cfg, init["product"])
     db.update_initiative(con, iid, config=cfg, status="segments")
     return RedirectResponse(f"/initiative/{iid}/panel", status_code=303)
 
@@ -264,8 +324,17 @@ async def segments_preview(request: Request):
     """Возрастные ограничения — из движка, а не из копии правил в JavaScript."""
     body = await request.json()
     product = body.get("product") or ""
-    rows = [{"id": s["id"], "target_size": _num(s.get("target_size"), 0)}
-            for s in body.get("segments", []) if s.get("id") in calc.SEGMENTS]
+    rows = []
+    for s in body.get("segments", []):
+        sid = s.get("id")
+        if sid not in calc.SEGMENTS:
+            continue
+        d = params.segment_defaults(sid, product) or {}
+        size = _num(s.get("target_size"), 0) or d.get("target_size") or 0
+        row = {"id": sid, "target_size": size}
+        if d.get("reachable_share") is not None:
+            row["reachable_share"] = d["reachable_share"]
+        rows.append(row)
     if not rows:
         return JSONResponse({"rows": [], "notes": []})
     probe = params.defaults()

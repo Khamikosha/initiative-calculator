@@ -10,19 +10,24 @@ const segform = $('#segform');
 if (segform) {
   const refresh = async () => {
     $$('.seg').forEach(el => {
-      const on = $('input[name=segments]', el).checked;
+      const cb = $('input[name=segments]', el);
+      const on = cb && cb.checked && !cb.disabled;
       el.classList.toggle('on', on);
       // Поля невыбранного сегмента остаются в DOM, только скрыты. Отключаем их, чтобы
       // они физически не уходили на сервер: иначе автозаполнение браузера способно
       // подсунуть в расчёт значения, которых человек не вводил.
       $$('.seg-body input', el).forEach(i => i.disabled = !on);
     });
-    const segments = $$('input[name=segments]:checked').map(cb => ({
-      id: cb.value,
-      target_size: $(`[data-size="${cb.value}"]`)?.value || 0,
-    }));
+    // Размеры не шлём: сервер берёт их из реестра сам. Отправляем только переопределения,
+    // если человек их ввёл — иначе превью показывало бы не то, что уйдёт в расчёт.
+    const segments = $$('input[name=segments]:checked').map(cb => {
+      const el = cb.closest('.seg');
+      const ov = $(`[name="seg.${cb.value}.target_size"]`, el);
+      const out = { id: cb.value };
+      if (ov && ov.value) out.target_size = ov.value;
+      return out;
+    });
     const notes = $('#segnotes');
-    $$('.gate').forEach(g => { g.textContent = ''; g.classList.remove('off'); });
     if (!segments.length) { notes.innerHTML = ''; return; }
 
     const r = await fetch('/api/segments/preview', {
@@ -30,20 +35,6 @@ if (segform) {
       body: JSON.stringify({ product: segform.dataset.product, segments }),
     });
     const data = await r.json();
-
-    data.rows.forEach(row => {
-      const g = $(`[data-gate="${row.id}"]`);
-      if (!g) return;
-      if (row.available_share === 0) {
-        g.textContent = 'продукт недоступен этому возрасту — сегмент будет исключён';
-        g.classList.add('off');
-      } else if (row.available_share < 1) {
-        g.textContent = `продукт с ${row.min_age} лет — в расчёт пойдёт `
-          + `${Math.round(row.available_share * 100)}% сегмента`;
-      } else {
-        g.textContent = 'продукт доступен всему сегменту';
-      }
-    });
     notes.innerHTML = data.notes.map(n => `<div class="callout">${escapeHtml(n)}</div>`).join('');
   };
   segform.addEventListener('change', refresh);
