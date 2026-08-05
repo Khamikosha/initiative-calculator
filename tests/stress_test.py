@@ -329,7 +329,63 @@ check("При хорошем индексе вердикт не понижает
       not res_high["verdict"]["downgraded_by_confidence"] and
       res_high["verdict"]["recommendation"].startswith("GO"))
 
-# ---------------------------------------------------------------- 13. Все кейсы считаются
+# ------------------------------- 13. Режим готовой ценности клиента (value_per_client)
+VAL = json.loads((CASES / "product_kids_deposit.json").read_text(encoding="utf-8"))
+v_res = calc.analyze(calc.resolve_segments(copy.deepcopy(VAL)))
+check("Режим ценности отражён в результате", v_res["pl"]["mode"] == "value_per_client")
+check("Валовая маржа = инкремент × ценность клиента",
+      abs(v_res["pl"]["total_gross_margin"]
+          - v_res["funnel"]["incremental_clients"] * v_res["pl"]["value_per_client"])
+      < v_res["pl"]["total_gross_margin"] * 0.001,
+      f'{v_res["pl"]["total_gross_margin"]:,} против '
+      f'{v_res["funnel"]["incremental_clients"] * v_res["pl"]["value_per_client"]:,}')
+check("LTV на клиента равен присланной ценности",
+      abs(v_res["pl"]["ltv_per_client"] - v_res["pl"]["value_per_client"]) <= 1)
+check("Срок окупаемости в режиме ценности не считается",
+      v_res["pl"]["payback_months"] is None)
+check("Отсутствие окупаемости объясняется, а не выдаётся за её отсутствие",
+      any("НЕ считается" in m for m in v_res["validation"]) and
+      not any("Окупаемости на заданном горизонте нет" in f for f in v_res["flags"]))
+
+# отток внутри присланного числа: множитель оттока не должен применяться второй раз
+_pess = calc.apply_scenario(calc.resolve_segments(copy.deepcopy(VAL)), calc.SCEN["pessimistic"])
+_base = calc.resolve_segments(copy.deepcopy(VAL))
+check("Пессимистичный сценарий бьёт по ценности ровно множителем маржи",
+      abs(_pess["unit_economics"]["value_per_client"]
+          - _base["unit_economics"]["value_per_client"] * 0.75) < 1)
+check("Множитель оттока в режиме ценности не применяется — иначе пессимизм считался бы дважды",
+      _pess["unit_economics"]["monthly_churn"] == _base["unit_economics"]["monthly_churn"])
+
+check("Торнадо в режиме ценности крутит ценность, а не баланс с оборотом",
+      {d["driver"] for d in v_res["tornado"]} >= {"Ценность клиента"} and
+      not {d["driver"] for d in v_res["tornado"]} & {"Средний баланс", "Месячный оборот"})
+
+_bad = copy.deepcopy(VAL); _bad["meta"]["horizon_months"] = 24
+check("Расхождение горизонтов ценности и оценки ловится",
+      any("несопоставимы" in m for m in
+          calc.analyze(calc.resolve_segments(_bad))["validation"]))
+check("Неизвестный режим отвергается",
+      rejected(lambda c: c["unit_economics"].__setitem__("mode", "npv"), "mode"))
+check("Ценность клиента взвешивается по числу клиентов",
+      abs(calc.resolve_segments(json.loads(
+          (CASES / "product_kids_key_deposit.json").read_text(encoding="utf-8")
+      ))["unit_economics"]["value_per_client"] - 12658) < 2,
+      "Детский Ключевой: 14 670 ₽ у детей и 9 805 ₽ у подростков → 12 658 ₽ средневзвешенно")
+
+# ------------------------------- 14. Возрастные вилки именных продуктов
+check("Детская карта — 6–13: подростки и молодёжь исключены",
+      calc.segment_availability("teens", "kids_card")[0] == 0 and
+      calc.segment_availability("youth", "kids_card")[0] == 0 and
+      abs(calc.segment_availability("kids", "kids_card")[0] - 8 / 14) < 1e-9)
+check("Детский Ключевой — 6–17: дети частично, подростки целиком, молодёжь нет",
+      calc.segment_availability("teens", "kids_key_deposit")[0] == 1.0 and
+      calc.segment_availability("youth", "kids_key_deposit")[0] == 0)
+check("Молодёжный вклад — с 14: дети исключены",
+      calc.segment_availability("kids", "youth_deposit")[0] == 0)
+check("Родовая карта осталась без верхней границы",
+      calc.segment_availability("youth", "card")[0] == 1.0)
+
+# ---------------------------------------------------------------- 15. Все кейсы считаются
 for path in sorted(CASES.glob("*.json")):
     try:
         r = engine(path)

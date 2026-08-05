@@ -124,6 +124,17 @@ inp("servicing", "Стоимость обслуживания", q("unit_economic
 inp("cor", "Cost of Risk (годовой)", q("unit_economics", "cor_annual"), "%", "риски / A", "ОБЯЗАТЕЛЬНО для кредитных продуктов. Для дебетовых 0.", PCT, True)
 inp("ramp", "Ramp-up маржи", q("unit_economics", "ramp_months", 1), "мес", "BI / B", "За сколько месяцев клиент выходит на полную маржу. Маржа множится на МИН(1; месяц/ramp).")
 inp("churn", "Месячный отток", q("unit_economics", "monthly_churn"), "%", "BI / A", "Доля активных, отваливающихся за месяц. Определяет LTV.", PCT, True)
+inp("mode", "Режим экономики клиента", q("unit_economics", "mode", "build_up"), "", "решение",
+    "build_up — собрать снизу вверх из строк выше. value_per_client — взять готовую "
+    "дисконтированную ценность клиента одним числом (строка ниже); тогда строки выше "
+    "в расчёте НЕ участвуют, а срок окупаемости не считается.", "General")
+inp("value_pc", "Ценность клиента (готовая)", q("unit_economics", "value_per_client"), "₽",
+    "модель продукта / A",
+    "Дисконтированная ценность одного клиента за свой горизонт, БЕЗ затрат на привлечение. "
+    "Отток, ramp-up и обслуживание уже внутри неё — поэтому поверх они не применяются.", CUR, True)
+inp("value_h", "Горизонт ценности", q("unit_economics", "value_horizon_months", 36), "мес", "модель продукта",
+    "За сколько месяцев посчитана ценность. Обязан совпадать с горизонтом оценки, иначе "
+    "затраты и доходы считаются на разные сроки.")
 
 section("ЗАТРАТЫ")
 inp("production", "Производство и креатив", q("costs", "production"), "₽", "смета", "Разовые, списываются в 1-й месяц. Входят в маркетинговые затраты для ROMI.", CUR)
@@ -193,7 +204,7 @@ if SEG:
                 "по свидетельству о рождении; с 6 лет — детская карта и копилки в детском приложении; с 14 — "
                 "вход в приложение, накопительные продукты, брокерский счёт, подписка и лояльность; с 18 — всё.")
     sg["A3"].font = NOTE
-    sg.merge_cells("A3:AC3")
+    sg.merge_cells("A3:AD3")
 
     SEG_HDR = [("Сегмент", 22), ("Ключ", 9), ("Включён", 10), ("Размер сегмента, чел", 16),
                ("Продукт доступен с, лет", 14), ("Доля доступных возрастов", 14),
@@ -203,7 +214,7 @@ if SEG:
                ("Комиссии/мес", 12), ("Кэшбэк", 9), ("Обслуживание/мес", 13), ("CoR", 9),
                ("Ramp-up, мес", 11), ("Отток/мес", 10), ("Выплата за привлечение", 14),
                ("вес: одобренные", 13), ("вес: клиенты", 12), ("база баланса", 13),
-               ("база оборота", 13), ("Доля в клиентах", 12)]
+               ("база оборота", 13), ("Доля в клиентах", 12), ("Ценность клиента, ₽", 15)]
     for i, (h, w) in enumerate(SEG_HDR, 1):
         c = sg.cell(5, i, h); c.font = H2; c.fill = FILL_H; c.border = THIN
         c.alignment = Alignment(wrap_text=True, vertical="center")
@@ -212,12 +223,13 @@ if SEG:
 
     SEG_FMT = {4: NUM, 5: NUM, 6: PCT, 7: PCT, 8: NUM, 9: NUM, 10: PCT, 11: PCT, 12: PCT, 13: PCT,
                14: CUR, 15: PCT, 16: CUR, 17: PCT2, 18: CUR, 19: PCT2, 20: CUR, 21: PCT,
-               22: NUM2, 23: PCT, 24: CUR, 25: NUM, 26: NUM, 27: NUM, 28: NUM, 29: PCT}
+               22: NUM2, 23: PCT, 24: CUR, 25: NUM, 26: NUM, 27: NUM, 28: NUM, 29: PCT, 30: CUR}
     SEG_KEYS = {4: "target_size", 6: "available_share", 7: "reachable_share", 9: "organic_apps_m",
                 10: "approval_rate", 11: "activation_rate", 12: "cannibalization", 13: "deadweight",
                 14: "avg_balance", 15: "nim_annual", 16: "monthly_turnover", 17: "interchange_rate",
                 18: "fee_income_m", 19: "cashback_rate", 20: "servicing_cost_m", 21: "cor_annual",
-                22: "ramp_months", 23: "monthly_churn", 24: "acq_cost_per_client"}
+                22: "ramp_months", 23: "monthly_churn", 24: "acq_cost_per_client",
+                30: "value_per_client"}
     SEG_FIRST = 6
     for k, srow in enumerate(SEG["rows"]):
         i = SEG_FIRST + k
@@ -258,7 +270,7 @@ if SEG:
     sg.cell(TOT, 9, f"=SUM({_rng('I')})")
     for col, base in (("J", "H"), ("K", "Y"), ("L", "Z"), ("M", "Z"), ("N", "Z"), ("O", "AA"),
                       ("P", "Z"), ("Q", "AB"), ("R", "Z"), ("S", "AB"), ("T", "Z"), ("U", "AA"),
-                      ("V", "Z"), ("W", "Z"), ("X", "Z")):
+                      ("V", "Z"), ("W", "Z"), ("X", "Z"), ("AD", "Z")):
         sg.cell(TOT, cix(col), _weighted(base, col))
     for col in list(SEG_FMT) + [1]:
         c = sg.cell(TOT, col)
@@ -272,7 +284,8 @@ if SEG:
     for key, col in (("aud", "H"), ("base_apps", "I"), ("approval", "J"), ("activation", "K"),
                      ("cannib", "L"), ("deadweight", "M"), ("balance", "N"), ("nim", "O"),
                      ("turnover", "P"), ("interchange", "Q"), ("fee", "R"), ("cashback", "S"),
-                     ("servicing", "T"), ("cor", "U"), ("ramp", "V"), ("churn", "W"), ("acq", "X")):
+                     ("servicing", "T"), ("cor", "U"), ("ramp", "V"), ("churn", "W"), ("acq", "X"),
+                     ("value_pc", "AD")):
         c = ws.cell(R[key], 2, f"=Сегменты!${col}${TOT}")
         c.font = GREEN; c.fill = FILL_RES
         ws.cell(R[key], 4, "лист «Сегменты»").font = BLACK
@@ -469,6 +482,9 @@ row("cost_c", "Расход в месяц",
     "Кэшбэк + обслуживание + стоимость риска. Расходы в сценариях не смягчаются — это консервативно.")
 row("marg", "Маржа на клиента в месяц (полная)", f'{{c}}{MR["rev"]}-{{c}}{MR["cost_c"]}', CURM,
     "В первые месяцы умножается на МИН(1; месяц/ramp-up).")
+row("value_pc", "Ценность клиента (готовая)", f'{V["value_pc"]}*{{c}}${KMARG}', CUR,
+    "Только для режима value_per_client. Множитель маржи к ней применяется, множитель оттока — нет: "
+    "отток уже внутри присланного числа, иначе пессимизм считался бы дважды.")
 row("churn_v", "Отток в месяц", f'MIN(0.9,{V["churn"]}*{{c}}${KCHURN})', PCT)
 row("disc_m", "Месячная ставка дисконта", f'(1+{V["disc"]})^(1/12)-1', PCT2)
 
@@ -508,15 +524,17 @@ for k in range(MONTHS):
         guard = f'IF($A{row_i}>{V["horizon"]},0,'
         f_active = (f'={guard}{prev_a}*(1-Модель!${mc}${MR["churn_v"]})'
                     f'+IF($A{row_i}<={CAMP},Модель!${mc}${MR["inc"]}/{CAMP},0))')
-        f_marg = (f'={guard}{a}{row_i}*Модель!${mc}${MR["marg"]}'
-                  f'*MIN(1,$A{row_i}/{RAMP}))')
+        f_marg = (f'={guard}IF({V["mode"]}="value_per_client",'
+                  f'IF($A{row_i}<={CAMP},Модель!${mc}${MR["inc"]}/{CAMP},0)*Модель!${mc}${MR["value_pc"]},'
+                  f'{a}{row_i}*Модель!${mc}${MR["marg"]}*MIN(1,$A{row_i}/{RAMP})))')
         f_cost = (f'={guard}IF($A{row_i}<={CAMP},'
                   f'(Модель!${mc}${MR["budget"]}+Модель!${mc}${MR["acq_total"]})/{CAMP},0)'
                   f'+IF($A{row_i}=1,{V["production"]}+{V["itdev"]}+{V["other"]},0)+{V["opex"]})')
         f_net = f'={mg}{row_i}-{co}{row_i}'
         f_cum = f'={prev_cu}+{nt}{row_i}'
         f_dsc = f'={guard}{nt}{row_i}/(1+Модель!${mc}${MR["disc_m"]})^$A{row_i})'
-        f_pb = f'=IF($A{row_i}>{V["horizon"]},"",IF({cu}{row_i}>=0,$A{row_i},""))'
+        f_pb = (f'=IF({V["mode"]}="value_per_client","",'
+                f'IF($A{row_i}>{V["horizon"]},"",IF({cu}{row_i}>=0,$A{row_i},"")))')
         for col, f_, fmt in ((a, f_active, NUM), (mg, f_marg, CUR), (co, f_cost, CUR),
                              (nt, f_net, CUR), (cu, f_cum, CUR), (dc, f_dsc, CUR), (pb, f_pb, NUM)):
             c = pl[f"{col}{row_i}"]; c.value = f_; c.font = BLACK; c.number_format = fmt; c.border = THIN
@@ -556,7 +574,9 @@ row("payback", "Окупаемость, мес",
 for i in range(2, 9):
     bi = i - 2
     rng = f"Расчет_PL!${gcl(STARTS[bi]+6)}$5:${gcl(STARTS[bi]+6)}${LASTR}"
-    m.cell(MR["payback"], i).value = f'=IF(MIN({rng})=0,"нет",MIN({rng}))'
+    m.cell(MR["payback"], i).value = (
+        f'=IF({V["mode"]}="value_per_client","не считается",'
+        f'IF(MIN({rng})=0,"нет",MIN({rng})))')
     m.cell(MR["payback"], i).font = GREEN
 
 block("МЕТРИКИ ЭФФЕКТИВНОСТИ")

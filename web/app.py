@@ -110,7 +110,10 @@ def form_to_config(form, cfg):
         for p in ps:
             field = f"{sec}.{p.key}"
             if field in form:
-                cfg.setdefault(sec, {})[p.key] = _num(form[field], p.default)
+                raw = form[field]
+                # текстовые параметры (режим экономики) через _num превратились бы в 0.0
+                cfg.setdefault(sec, {})[p.key] = (
+                    (str(raw).strip() or p.default) if p.fmt == "text" else _num(raw, p.default))
 
     # Сегменты. Набор задаётся галочками на шаге «Сегменты», а посегментные переопределения
     # правятся на шаге «Допущения» — там галочек нет. Поэтому трогаем только то, что реально

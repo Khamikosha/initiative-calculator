@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "name": "СберВклад Молодёжный — оценка запуска",
+    "type": "frk4",
+    "product": "youth_deposit",
+    "horizon_months": 36,
+    "discount_rate_annual": 0.2
+  },
+  "audience": {
+    "segments": [
+      {
+        "id": "teens",
+        "target_size": 6000000,
+        "reachable_share": 1.0,
+        "baseline_organic_apps_m": 6000,
+        "value_per_client": 513,
+        "approval_rate": 0.95,
+        "activation_rate": 0.6,
+        "cannibalization": 0.12
+      },
+      {
+        "id": "youth",
+        "target_size": 10500000,
+        "reachable_share": 1.0,
+        "baseline_organic_apps_m": 22000,
+        "value_per_client": 860,
+        "approval_rate": 0.85,
+        "activation_rate": 0.65,
+        "cannibalization": 0.25
+      }
+    ]
+  },
+  "channels": [
+    {
+      "name": "Свои каналы (push/in-app)",
+      "kind": "internal",
+      "frk_tier": 4,
+      "reach_abs": 13800000,
+      "budget": 0,
+      "response_rate": 0.018,
+      "cr_to_app": 0.22
+    },
+    {
+      "name": "Перформанс",
+      "kind": "perform",
+      "frk_tier": 4,
+      "budget": 25000000,
+      "cpm": 380,
+      "ctr": 0.007,
+      "cr_to_app": 0.035
+    }
+  ],
+  "funnel": {
+    "approval_rate": 0.9,
+    "activation_rate": 0.6,
+    "cannibalization": 0.15,
+    "deadweight": 0.0
+  },
+  "unit_economics": {
+    "mode": "value_per_client",
+    "value_per_client": 0,
+    "value_horizon_months": 36
+  },
+  "costs": {
+    "production": 8000000,
+    "campaign_months": 3,
+    "it_dev": 0,
+    "opex_monthly": 0,
+    "one_off_other": 0,
+    "acq_cost_per_client": 0
+  },
+  "rice": {
+    "reach": 0,
+    "impact": 2,
+    "confidence": 0.7,
+    "effort": 8
+  },
+  "confidence": {
+    "A": 8,
+    "B": 2,
+    "C": 4,
+    "D": 1
+  }
+}

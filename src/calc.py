@@ -19,23 +19,37 @@ SEGMENTS = {
 # с 6 лет — детская карта и копилки в детском приложении; с 14 — вход в банковское
 # приложение, накопительные продукты, брокерский счёт, подписка и программа лояльности;
 # с 18 — весь функционал банка и экосистемы.
-PRODUCT_AGE_GATE = {
-    "account": 0, "deposit": 0, "piggy_bank": 6, "card": 6,
-    "savings": 14, "broker": 14, "prime": 14, "loyalty": 14,
-    "credit": 18, "ecosystem": 18,
+# Формат: (с какого возраста доступен, по какой включительно). None сверху — границы нет.
+#
+# Верхняя граница нужна не для порядка: именной продукт живёт в своей возрастной вилке,
+# а не «от порога и до бесконечности». «Детская карта» — это 6–13, в 14 клиент переходит
+# на другой продукт. Без верхней границы модель молча включила бы подростков и молодёжь
+# в детскую карту и посчитала бы их по чужой ценности клиента.
+PRODUCT_AGE = {
+    # родовые категории
+    "account": (0, None), "deposit": (0, None), "piggy_bank": (6, None), "card": (6, None),
+    "savings": (14, None), "broker": (14, None), "prime": (14, None), "loyalty": (14, None),
+    "credit": (18, None), "ecosystem": (18, None),
+    # именные продукты линейки — рамки свои и у́же родовой категории
+    "kids_card": (6, 13),
+    "kids_deposit": (6, 13),
+    "kids_key_deposit": (6, 17),
+    "youth_deposit": (14, None),
 }
+PRODUCT_AGE_GATE = {k: lo for k, (lo, _) in PRODUCT_AGE.items()}   # только нижний порог
 # Продукты, которые для детей оформляются только в офисе и только третьим лицом
-BRANCH_ONLY_UNDER_14 = {"account", "deposit"}
+BRANCH_ONLY_UNDER_14 = {"account", "deposit", "kids_deposit", "kids_key_deposit"}
 APP_AGE = 14                       # доступ в банковское приложение
 
 
 def segment_availability(seg_id, product):
     """Доля возрастов сегмента, которым продукт доступен, и минимальный доступный возраст."""
     s = SEGMENTS[seg_id]
-    gate = PRODUCT_AGE_GATE.get(product, 0)
+    gate, top = PRODUCT_AGE.get(product, (0, None))
     lo = max(s["age_min"], gate)
+    hi = s["age_max"] if top is None else min(s["age_max"], top)
     span = s["age_max"] - s["age_min"] + 1
-    return max(0, s["age_max"] - lo + 1) / span, lo
+    return max(0, hi - lo + 1) / span, lo
 
 
 def _wavg(pairs):
@@ -86,7 +100,8 @@ def resolve_segments(cfg):
                "deadweight": g(s, "deadweight", g(fun, "deadweight")),
                "acq_cost_per_client": g(s, "acq_cost_per_client", g(kt, "acq_cost_per_client"))}
         for k in ("avg_balance", "nim_annual", "monthly_turnover", "interchange_rate", "fee_income_m",
-                  "cashback_rate", "servicing_cost_m", "cor_annual", "ramp_months", "monthly_churn"):
+                  "cashback_rate", "servicing_cost_m", "cor_annual", "ramp_months", "monthly_churn",
+                  "value_per_client"):
             row[k] = g(s, k, g(ue, k, 1.0 if k == "ramp_months" else 0.0))
         if avail <= 0:
             notes.append(f"СЕГМЕНТ ИСКЛЮЧЁН: «{meta['name']}» — продукт «{product}» доступен "
@@ -132,8 +147,10 @@ def resolve_segments(cfg):
     fun["activation_rate"] = _wavg([(w, r["activation_rate"]) for w, r in appr_w])
     for k in ("cannibalization", "deadweight"):
         fun[k] = _wavg([(w, r[k]) for w, r in cl_w])
+    # ценность клиента взвешивается по числу клиентов: суммарная ценность = Σ клиенты_i × ценность_i,
+    # поэтому среднее по клиентам даёт ту же сумму точно, а не приблизительно
     for k in ("avg_balance", "monthly_turnover", "fee_income_m", "servicing_cost_m",
-              "ramp_months", "monthly_churn"):
+              "ramp_months", "monthly_churn", "value_per_client"):
         ue[k] = _wavg([(w, r[k]) for w, r in cl_w])
     for k, base in (("nim_annual", bal_w), ("cor_annual", bal_w),
                     ("interchange_rate", turn_w), ("cashback_rate", turn_w)):
@@ -163,7 +180,8 @@ _MONEY = (0.0, 1e12)
 UE_KEYS = {"avg_balance": (0.0, 1e9), "nim_annual": (-1.0, 1.0), "monthly_turnover": (0.0, 1e9),
            "interchange_rate": _RATE, "fee_income_m": (0.0, 1e7), "cashback_rate": _RATE,
            "servicing_cost_m": (0.0, 1e6), "cor_annual": _RATE,
-           "ramp_months": (0.0, 120.0), "monthly_churn": _RATE}
+           "ramp_months": (0.0, 120.0), "monthly_churn": _RATE,
+           "value_per_client": (0.0, 1e7)}
 FUNNEL_KEYS = {"approval_rate": _RATE, "activation_rate": _RATE,
                "cannibalization": _RATE, "deadweight": _RATE}
 
@@ -173,7 +191,7 @@ SCHEMA = {
     "audience": {"target_size": (0.0, 2e9), "baseline_organic_apps_m": (0.0, 1e9),
                  "halo_months": (0.0, 60.0), "halo_decay": _RATE, "segments": None},
     "funnel": dict(FUNNEL_KEYS),
-    "unit_economics": dict(UE_KEYS),
+    "unit_economics": {**UE_KEYS, "mode": None, "value_horizon_months": (1, 600)},
     "costs": {"production": _MONEY, "it_dev": _MONEY, "one_off_other": _MONEY,
               "opex_monthly": _MONEY, "campaign_months": (1, 600),
               "acq_cost_per_client": (0.0, 1e7)},
@@ -188,6 +206,19 @@ SEGMENT_KEYS = {"id": None, "target_size": (0.0, 2e9), "reachable_share": _RATE,
                 "baseline_organic_apps_m": (0.0, 1e9), "acq_cost_per_client": (0.0, 1e7),
                 **FUNNEL_KEYS, **UE_KEYS}
 CHANNEL_KINDS = ("internal", "perform", "brand")
+
+# Два способа задать экономику клиента.
+#   build_up        — собрать снизу вверх: баланс, оборот, ставки, отток, ramp. Даёт помесячную
+#                     кривую, срок окупаемости и богатый торнадо, но требует десяти допущений.
+#   value_per_client — взять готовую дисконтированную ценность клиента одним числом из
+#                     валидированной модели продукта. Меньше допущений и выше грейд источника,
+#                     но помесячной кривой нет, а значит нет и срока окупаемости.
+MODE_BUILD_UP, MODE_VALUE = "build_up", "value_per_client"
+MODES = (MODE_BUILD_UP, MODE_VALUE)
+
+
+def is_value_mode(cfg):
+    return g(cfg.get("unit_economics", {}), "mode", MODE_BUILD_UP) == MODE_VALUE
 
 
 class ConfigError(ValueError):
@@ -221,7 +252,10 @@ def validate_config(cfg):
     """Строгая проверка: неизвестный ключ или значение вне диапазона — ошибка, а не дефолт."""
     if not isinstance(cfg, dict):
         raise ConfigError("Конфиг должен быть JSON-объектом.")
+    mode = (cfg.get("unit_economics") or {}).get("mode")
     errs, known = [], set(SCHEMA) | {"channels"}
+    if mode is not None and mode not in MODES:
+        errs.append(f"unit_economics.mode = «{mode}» — допустимы только {', '.join(MODES)}.")
     for sec in sorted(set(cfg) - known):
         errs.append(f"Неизвестный раздел «{sec}».{_hint(sec, known)}")
     for sec, allowed in SCHEMA.items():
@@ -358,23 +392,36 @@ def run_pl(cfg, funnel):
     # Поэтому база — activated, а не incremental. Это главная ловушка промо-механик.
     acq = g(k, "acq_cost_per_client"); gross = funnel["_activated_raw"]
     acq_total = gross * acq
+    value_mode = is_value_mode(cfg); value = g(u, "value_per_client")
     rows, cum, cum_disc, payback = [], 0.0, 0.0, None
     for m in range(h):
         cohort = inc / camp_m if m < camp_m else 0.0
         active = (rows[-1]["active_clients"] if rows else 0.0) * (1 - churn) + cohort
-        gm = active * monthly_margin(u, m)
+        if value_mode:
+            # Ценность уже дисконтирована за свой горизонт ОТ МОМЕНТА привлечения и уже
+            # включает отток, ramp и обслуживание. Строить помесячную маржу поверх неё —
+            # значит посчитать жизнь клиента второй раз. Поэтому вся ценность когорты
+            # признаётся в месяц привлечения, а дальше дисконтируется к нулевому месяцу.
+            gm = cohort * value
+        else:
+            gm = active * monthly_margin(u, m)
         cost = ((media + acq_total) / camp_m if m < camp_m else 0.0)
         if m == 0:
             cost += g(k, "production") + g(k, "it_dev") + g(k, "one_off_other")
         cost += g(k, "opex_monthly")
         net = gm - cost; cum += net; cum_disc += net / ((1 + r_m) ** (m + 1))
-        if payback is None and cum >= 0:
+        # В режиме ценности накопленный поток смешивает дисконтированную ценность
+        # с недисконтированными затратами, а момент возврата денег из одного числа
+        # не выводится. Срок окупаемости честнее не считать вовсе — см. validate().
+        if not value_mode and payback is None and cum >= 0:
             payback = m + 1
         rows.append({"month": m + 1, "active_clients": active, "gross_margin": gm,
                      "costs": cost, "net": net, "cumulative": cum, "cumulative_discounted": cum_disc})
     total_gm = sum(r["gross_margin"] for r in rows); total_cost = sum(r["costs"] for r in rows)
     mkt_cost = media + g(k, "production") + acq_total
-    return {"horizon_months": h, "gross_clients_paid": round(gross),
+    return {"horizon_months": h, "mode": MODE_VALUE if value_mode else MODE_BUILD_UP,
+            "value_per_client": round(value) if value_mode else None,
+            "gross_clients_paid": round(gross),
             "acquisition_payout_total": round(acq_total),
             "payout_per_incremental_client": round(acq_total / inc) if inc > 0 else None,
             "total_gross_margin": round(total_gm), "total_costs": round(total_cost),
@@ -403,10 +450,17 @@ def apply_scenario(cfg, s):
         key = "brand_uplift" if ch.get("kind") == "brand" else "cr_to_app"
         if ch.get(key):
             ch[key] *= s["conv"]
-    for key in ("nim_annual", "interchange_rate", "fee_income_m"):
-        if key in c["unit_economics"] and c["unit_economics"][key]:
-            c["unit_economics"][key] *= s["margin"]
-    c["unit_economics"]["monthly_churn"] = min(0.9, g(c["unit_economics"], "monthly_churn") * s["churn"])
+    if is_value_mode(c):
+        # Ценность клиента уже содержит отток внутри себя, поэтому множитель оттока НЕ
+        # применяем: иначе пессимизм считался бы дважды — и через ценность, и через жизнь.
+        # Пессимистичный сценарий здесь мягче, чем в build_up; если нужен жёстче —
+        # присылайте пессимистичную ценность клиента отдельным числом.
+        c["unit_economics"]["value_per_client"] = g(c["unit_economics"], "value_per_client") * s["margin"]
+    else:
+        for key in ("nim_annual", "interchange_rate", "fee_income_m"):
+            if key in c["unit_economics"] and c["unit_economics"][key]:
+                c["unit_economics"][key] *= s["margin"]
+        c["unit_economics"]["monthly_churn"] = min(0.9, g(c["unit_economics"], "monthly_churn") * s["churn"])
     c["funnel"]["cannibalization"] = min(0.95, max(0.0, g(c["funnel"], "cannibalization") + s["cannib_add"]))
     return c
 
@@ -418,9 +472,20 @@ TORNADO = [("Конверсия в заявку (все каналы)", "conv"),
     ("Deadweight (взяли бы и так)", ("funnel", "deadweight")),
     ("Выплата за привлечение", ("costs", "acq_cost_per_client"))]
 
+# В режиме ценности драйверов юнит-экономики нет — вместо шести отдельных допущений
+# одно число из чужой модели. Крутить его компоненты у нас нечем и незачем.
+TORNADO_VALUE = [("Конверсия в заявку (все каналы)", "conv"),
+                 ("Approval rate", ("funnel", "approval_rate")),
+                 ("Activation rate", ("funnel", "activation_rate")),
+                 ("Каннибализация", ("funnel", "cannibalization")),
+                 ("Ценность клиента", ("unit_economics", "value_per_client")),
+                 ("Deadweight (взяли бы и так)", ("funnel", "deadweight")),
+                 ("Выплата за привлечение", ("costs", "acq_cost_per_client"))]
+
+
 def tornado(cfg, base_npv, delta=0.25):
     out = []
-    for label, path in TORNADO:
+    for label, path in (TORNADO_VALUE if is_value_mode(cfg) else TORNADO):
         swing = []
         for mult in (1 - delta, 1 + delta):
             c = copy.deepcopy(cfg)
@@ -490,7 +555,28 @@ def validate(cfg, f, pl):
             c.get("kind") == "brand" for c in cfg.get("channels", [])):
         out.append("ОШИБКА ВВОДА: в плане есть охватные каналы (ТВ/наружка), но органический поток заявок = 0. "
                    "Brand-эффект считается как прирост к органике, поэтому весь охватный бюджет даёт ровно 0 заявок.")
-    if g(cfg["unit_economics"], "monthly_churn") <= 0:
+    if is_value_mode(cfg):
+        u = cfg["unit_economics"]
+        vh = int(g(u, "value_horizon_months", h))
+        out.append(f"РЕЖИМ: экономика задана готовой ценностью клиента "
+                   f"({round(g(u, 'value_per_client')):,} ₽ за {vh} мес, дисконтированной). "
+                   "Срок окупаемости в этом режиме НЕ считается: момент возврата денег "
+                   "из одного числа не выводится. Нужна окупаемость — задавайте юнит-экономику "
+                   "снизу вверх (mode = build_up).".replace(",", " "))
+        if g(u, "value_per_client") <= 0:
+            out.append("ОШИБКА ВВОДА: режим ценности клиента включён, но сама ценность = 0. "
+                       "Вся валовая маржа обнулится, останутся одни затраты.")
+        if vh != h:
+            out.append(f"ОШИБКА ВВОДА: ценность посчитана за {vh} мес, а горизонт оценки {h} мес. "
+                       "Затраты считаются на свой горизонт, а ценность приходит целиком — "
+                       "цифры несопоставимы. Выровняйте горизонты.")
+        stale = [k for k in ("avg_balance", "monthly_turnover", "nim_annual", "interchange_rate",
+                             "cashback_rate", "servicing_cost_m", "cor_annual") if g(u, k)]
+        if stale:
+            out.append(f"ВНИМАНИЕ: в режиме ценности клиента не участвуют {', '.join(stale)} — "
+                       "они заданы, но на результат не влияют. Отток и ramp-up тоже внутри "
+                       "присланного числа, поэтому множитель оттока в сценариях не применяется.")
+    elif g(cfg["unit_economics"], "monthly_churn") <= 0:
         out.append("ВНИМАНИЕ: отток = 0, клиент живёт вечно. LTV и NPV завышены — поставьте хотя бы 1–2% в месяц.")
     # насыщение канала: добавочный бюджет уже не работает
     for c in f["channels"]:
@@ -526,7 +612,7 @@ def flags(cfg, f, pl):
         out.append(f"{round(br / f['applications_total'] * 100)}% заявок держится на brand-uplift — самое недоказуемое допущение. Нужен geo-holdout или MMM.")
     if pl["ltv_to_cac"] is not None and pl["ltv_to_cac"] < 3:
         out.append(f"LTV/CAC = {pl['ltv_to_cac']} на {pl['horizon_months']} мес (норма ≥3).")
-    if pl["payback_months"] is None:
+    if pl["payback_months"] is None and pl.get("mode") != MODE_VALUE:
         out.append("Окупаемости на заданном горизонте нет.")
     if pl.get("acquisition_payout_total"):
         over = pl["gross_clients_paid"] - f["incremental_clients"]
@@ -534,8 +620,10 @@ def flags(cfg, f, pl):
                    f"только {f['incremental_clients']:,}. За {over:,} клиентов ({over/max(pl['gross_clients_paid'],1):.0%}) "
                    f"вы платите, ничего не получая: они пришли бы и без стимула или переехали со своих же продуктов. "
                    f"Фактическая выплата на одного ИНКРЕМЕНТАЛЬНОГО клиента — {pl['payout_per_incremental_client']:,} ₽.")
-    # правила предметной области: оба флага есть на листе «Итог», в движке их не было
-    if g(cfg["unit_economics"], "cor_annual") <= 0 and monthly_margin(cfg["unit_economics"], 10 ** 6) > 0:
+    # правила предметной области: оба флага есть на листе «Итог», в движке их не было.
+    # В режиме ценности стоимость риска уже внутри присланного числа — флаг был бы ложным.
+    if (not is_value_mode(cfg) and g(cfg["unit_economics"], "cor_annual") <= 0
+            and monthly_margin(cfg["unit_economics"], 10 ** 6) > 0):
         out.append("Cost of Risk = 0. Для кредитных продуктов это делает модель заведомо неверной: "
                    "без стоимости риска кредитка всегда выглядит прекрасно.")
     if g(cfg["funnel"], "cannibalization") <= 0:

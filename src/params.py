@@ -114,13 +114,53 @@ INITIATIVE_TYPES = {
 }
 TYPE_CHOICES = [(k, v["label"]) for k, v in INITIATIVE_TYPES.items()]
 
-# Продукт определяет возрастные правила банка — пороги живут в calc.PRODUCT_AGE_GATE
-PRODUCTS = [
-    ("account", "Счёт"), ("deposit", "Вклад"), ("piggy_bank", "Копилка"), ("card", "Карта"),
-    ("savings", "Накопительный счёт"), ("broker", "Брокерский счёт"), ("prime", "Подписка"),
-    ("loyalty", "Программа лояльности"), ("credit", "Кредит"), ("ecosystem", "Экосистема"),
-]
-PRODUCT_NAME = dict(PRODUCTS)
+# ------------------------------------------------------------------ КАТАЛОГ ПРОДУКТОВ
+# Возрастные рамки живут в calc.PRODUCT_AGE — это правила банка. Здесь к ним добавлена
+# готовая дисконтированная ценность клиента по сегментам: число из валидированной модели
+# продукта, грейд A. Оно заменяет десяток допущений юнит-экономики грейдов C и D.
+#
+# Что ВНУТРИ этих чисел: отток, ramp-up, обслуживание, риск. Что НЕ входит: затраты
+# на внешнее привлечение — их добавляет сама модель через медиабюджет и производство.
+# Поэтому двойного счёта CAC не возникает.
+VALUE_HORIZON_MONTHS = 36
+VALUE_RATE_ANNUAL = 0.20
+VALUE_EXCLUDES = "затраты на внешнее привлечение (CAC)"
+
+PRODUCT_CATALOG = {
+    # именные продукты линейки — с присланной ценностью клиента
+    "kids_card":        {"label": "Детская карта",           "value": {"kids": 120}},
+    "kids_deposit":     {"label": "Вклад СберKids+",         "value": {"kids": 21903}},
+    "kids_key_deposit": {"label": "Вклад Детский Ключевой",  "value": {"kids": 14670, "teens": 9805}},
+    "youth_deposit":    {"label": "СберВклад Молодёжный",    "value": {"teens": 513, "youth": 860}},
+    "savings":          {"label": "Накопительный счёт",      "value": {"teens": 418, "youth": 795}},
+    "broker":           {"label": "Брокерский счёт",         "value": {"teens": 760, "youth": 1100}},
+    # родовые категории — ценности нет, считаются снизу вверх
+    "card":       {"label": "Карта (родовая)"},
+    "account":    {"label": "Счёт"},
+    "deposit":    {"label": "Вклад (родовой)"},
+    "piggy_bank": {"label": "Копилка"},
+    "prime":      {"label": "Подписка Прайм"},
+    "loyalty":    {"label": "Программа лояльности"},
+    "credit":     {"label": "Кредит"},
+    "ecosystem":  {"label": "Экосистема"},
+}
+PRODUCTS = [(k, v["label"]) for k, v in PRODUCT_CATALOG.items()]
+PRODUCT_NAME = {k: v["label"] for k, v in PRODUCT_CATALOG.items()}
+
+
+def product_values(product_id):
+    """Ценность клиента по сегментам, если она есть в каталоге."""
+    return dict(PRODUCT_CATALOG.get(product_id, {}).get("value") or {})
+
+
+def product_age(product_id):
+    return calc.PRODUCT_AGE.get(product_id, (0, None))
+
+
+def product_segments(product_id):
+    """Сегменты, которым продукт доступен по возрасту."""
+    return [sid for sid in calc.SEGMENTS
+            if calc.segment_availability(sid, product_id)[0] > 0]
 
 BRAND_TYPES = tuple(k for k, v in INITIATIVE_TYPES.items() if "brand" in v["kinds"])
 FRK_TYPES = ("frk4", "frk3", "frk2", "frk1")
@@ -211,6 +251,19 @@ UNIT = [
       grade="A", key_assumption=True, segment_scoped=True,
       note="Доля активных, отваливающихся за месяц. Определяет LTV. Ноль означает вечного клиента "
            "и завышает NPV."),
+    P("mode", "unit_economics", "Режим экономики клиента", fmt="text", default="build_up",
+      grade="A",
+      note="build_up — собрать снизу вверх из строк выше. value_per_client — взять готовую "
+           "дисконтированную ценность клиента одним числом; тогда строки выше в расчёте "
+           "НЕ участвуют, а срок окупаемости не считается."),
+    P("value_per_client", "unit_economics", "Ценность клиента (готовая)", unit="₽", fmt="money",
+      default=0, grade="A", key_assumption=True, segment_scoped=True,
+      note="Дисконтированная ценность одного клиента за свой горизонт, БЕЗ затрат на привлечение. "
+           "Отток, ramp-up, обслуживание и риск уже внутри неё — поверх они не применяются."),
+    P("value_horizon_months", "unit_economics", "Горизонт ценности", unit="мес", fmt="int",
+      default=VALUE_HORIZON_MONTHS, grade="A",
+      note="За сколько месяцев посчитана ценность. Обязан совпадать с горизонтом оценки, "
+           "иначе затраты и доходы считаются на разные сроки."),
 ]
 
 # ------------------------------------------------------------------ ЗАТРАТЫ
