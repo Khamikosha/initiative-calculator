@@ -141,6 +141,18 @@ cfg = copy.deepcopy(BASE); cfg["unit_economics"]["monthly_churn"] = 0
 check("Ловится: нулевой отток", has(cfg, "отток = 0"))
 check("Ловится: насыщение канала", has(copy.deepcopy(BASE), "НАСЫЩЕНИЕ"))
 
+# perform-канал, помеченный как internal, тратит бюджет и даёт ноль: модель считает
+# без ошибок и считает не то. Вскрылось на веб-форме, где тип канала по умолчанию
+# подставлялся первым пунктом списка.
+cfg = copy.deepcopy(BASE)
+cfg["channels"] = [{"name": "Перформанс", "kind": "internal", "frk_tier": 4,
+                    "budget": 25_000_000, "cpm": 400, "ctr": 0.006, "cr_to_app": 0.04}]
+check("Ловится: канал тратит бюджет и не даёт ничего", has(cfg, "БЮДЖЕТ ВПУСТУЮ"))
+cfg["channels"][0]["kind"] = "perform"
+check("Правильный тип канала предупреждения не даёт", not has(cfg, "БЮДЖЕТ ВПУСТУЮ"))
+cfg["channels"][0].update(kind="internal", budget=0)
+check("Канал без бюджета не считается потраченным впустую", not has(cfg, "БЮДЖЕТ ВПУСТУЮ"))
+
 # ---------------------------------------------------------------- 7. Экономическая логика
 cfg = copy.deepcopy(BASE); cfg["unit_economics"]["cor_annual"] = 0.15
 _, p_cor = run(cfg)

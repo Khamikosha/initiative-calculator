@@ -1,2 +1,10 @@
+# движок и книга
 openpyxl>=3.1
-formulas>=1.2
+formulas>=1.2          # пересчёт формул книги без Excel и LibreOffice
+
+# веб-путь пользователя
+fastapi>=0.110
+uvicorn[standard]>=0.27
+jinja2>=3.1
+python-multipart>=0.0.9
+httpx>=0.27            # тестовый клиент

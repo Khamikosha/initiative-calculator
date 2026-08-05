@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% macro cell(p, sec, cfg) %}
+  <input name="{{ sec }}.{{ p.key }}" inputmode="decimal"
+         class="{{ 'key' if p.key_assumption }}"
+         value="{{ cfg.get(sec, {}).get(p.key, p.default) }}">
+{% endmacro %}
+
+{% block body %}
+<h1>Допущения</h1>
+<p class="lead">Значения предзаполнены. Поправьте те, что знаете точно, и проставьте грейды
+источников внизу — от них зависит вердикт: при индексе ниже 0,6 «GO» невозможен ни при каком NPV.
+<span class="key-legend">Жёлтым</span> — допущения, которые сильнее прочих двигают результат.</p>
+
+{% if error %}
+<div class="callout bad">
+  <b>Движок отверг конфиг.</b> Это строгая проверка: неизвестный ключ или значение вне диапазона
+  не превращаются в тихий ноль.
+  <pre>{{ error }}</pre>
+</div>
+{% endif %}
+
+<form method="post" class="assumptions" autocomplete="off">
+
+{% set seg_ids = chosen.keys() | list %}
+
+{% for sec, title, ps in params.SECTIONS %}
+  {% if sec not in ('meta', 'confidence') %}
+  <section class="card">
+    <h3>{{ title }}</h3>
+    <table class="params">
+      <thead>
+        <tr>
+          <th>Параметр</th>
+          <th class="r">{{ "Общее" if seg_ids else "Значение" }}</th>
+          {% for sid in seg_ids %}<th class="r">{{ SEGMENTS[sid].name }}</th>{% endfor %}
+          <th>Ед.</th><th>Что это</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for p in ps %}
+        {% if not (sec == 'audience' and p.key in ('target_size', 'baseline_organic_apps_m') and seg_ids) %}
+        <tr>
+          <td>{{ p.label }}<span class="grade g{{ p.grade }}">{{ p.grade }}</span></td>
+          <td class="r">{{ cell(p, sec, cfg) }}</td>
+          {% for sid in seg_ids %}
+            <td class="r">
+              {% if p.segment_scoped %}
+                <input name="seg.{{ sid }}.{{ p.key }}" inputmode="decimal" class="seg-in"
+                       value="{{ chosen[sid][p.key] if p.key in chosen[sid] else '' }}"
+                       placeholder="общее">
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+          {% endfor %}
+          <td class="unit">{{ p.unit }}</td>
+          <td class="note">{{ p.note }}</td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if seg_ids %}
+      <small class="muted">Пустая ячейка сегмента — берётся общее значение.
+      Размер сегмента и органика задаются на шаге «Сегменты».</small>
+    {% endif %}
+  </section>
+  {% endif %}
+{% endfor %}
+
+<section class="card">
+  <h3>Каналы</h3>
+  <p class="muted">internal — свои каналы (push, in-app, SMS), perform — прямой отклик,
+  brand — охватные (ТВ, наружка). Охватные не дают прямых заявок: они работают только через
+  прирост органики, и это самое недоказуемое звено модели.</p>
+  <div class="scroll">
+  <table class="params channels">
+    <thead>
+      <tr>
+        <th>Канал</th><th>Тип</th><th>ФРК</th><th class="r">Бюджет, ₽</th><th class="r">CPM, ₽</th>
+        <th class="r">CTR</th><th class="r">Response</th><th class="r">CR в заявку</th>
+        <th class="r">Brand uplift</th><th class="r">Охват базы</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="chbody">
+      {% for ch in (cfg.channels or []) + [{}, {}] %}
+      <tr>
+        <td><input name="ch.{{ loop.index0 }}.name" value="{{ ch.get('name', '') }}"
+                   placeholder="название"></td>
+        <td>
+          {# без явного selected браузер выберет первый пункт: пустая строка молча
+             становилась internal, а internal не смотрит на CPM и CTR — канал съедал
+             бюджет и давал ноль заявок #}
+          <select name="ch.{{ loop.index0 }}.kind">
+            {% for k in ('perform', 'internal', 'brand') %}
+              <option value="{{ k }}" {{ 'selected' if (ch.get('kind') or 'perform') == k }}>{{ k }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td><input name="ch.{{ loop.index0 }}.frk_tier" class="tiny"
+                   value="{{ ch.get('frk_tier', 4) }}"></td>
+        <td class="r"><input name="ch.{{ loop.index0 }}.budget" value="{{ ch.get('budget', '') }}"></td>
+        <td class="r"><input name="ch.{{ loop.index0 }}.cpm" value="{{ ch.get('cpm', '') }}"></td>
+        <td class="r"><input name="ch.{{ loop.index0 }}.ctr" value="{{ ch.get('ctr', '') }}"></td>
+        <td class="r"><input name="ch.{{ loop.index0 }}.response_rate" value="{{ ch.get('response_rate', '') }}"></td>
+        <td class="r"><input name="ch.{{ loop.index0 }}.cr_to_app" value="{{ ch.get('cr_to_app', '') }}"></td>
+        <td class="r"><input name="ch.{{ loop.index0 }}.brand_uplift" value="{{ ch.get('brand_uplift', '') }}"></td>
+        <td class="r"><input name="ch.{{ loop.index0 }}.reach_abs" value="{{ ch.get('reach_abs', '') }}"></td>
+        <td></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <button type="button" class="ghost" id="addch">Добавить канал</button>
+  <small class="muted">Пустые строки игнорируются. Доли вводить числом: 1,5% это 0,015.</small>
+</section>
+
+<section class="card conf-card">
+  <h3>Качество данных</h3>
+  <p class="muted">Сколько допущений какого грейда. Это не формальность: модель, где половина
+  параметров из воздуха, даёт разброс шире собственного ответа.</p>
+  <div class="grades">
+    {% for p in params.GRADES %}
+      <label class="field grade-field">
+        <span>{{ p.label }}</span>
+        <input name="confidence.{{ p.key }}" class="conf-in" data-grade="{{ p.key }}"
+               inputmode="numeric" value="{{ cfg.get('confidence', {}).get(p.key, 0) }}">
+        <small>{{ p.note }}</small>
+      </label>
+    {% endfor %}
+  </div>
+  <div class="conf-out" id="confout">
+    {% if conf %}
+      <b>Индекс {{ conf.index }}</b> — {{ conf.tier }}. {{ conf.note }}
+    {% else %}
+      Проставьте грейды допущений.
+    {% endif %}
+  </div>
+</section>
+
+<div class="actions sticky">
+  <button class="btn">Посчитать</button>
+  <button class="ghost" name="action" value="save">Сохранить черновик</button>
+  <a class="ghost-link" href="/initiative/{{ init.id }}/panel">Назад к панели</a>
+</div>
+</form>
+{% endblock %}

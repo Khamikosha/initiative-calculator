@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Обратная связь панели</h1>
+<p class="lead">Панель качественного исследования собирает персон с разными интересами и
+вытаскивает возражения конкретных людей — то, чего не видно в цифрах. Она
+<b>не меняет расчёт</b>: её выводы читает человек и сам решает, что поправить в описании
+и допущениях.</p>
+
+{% if 'kids' in seg_ids %}
+<div class="callout">
+  Выбран сегмент «Дети (0–13)». Респондент здесь — родитель, а не ребёнок: до 14 лет счёт и
+  вклад открывает третье лицо в офисе. В брифе это уже учтено — панель должна быть
+  родительской, с комплаенс-голосом.
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Бриф для панели</h3>
+  <p class="muted">Скопируйте и запустите навык <code>idea-research-panel</code> в Claude,
+  затем вставьте отчёт ниже. Приложение хранит отчёт вместе с инициативой, но не делает вид,
+  что запустило исследование само.</p>
+  <textarea id="brief" rows="12" readonly>{{ brief }}</textarea>
+  <button type="button" class="ghost" id="copybrief">Скопировать бриф</button>
+</div>
+
+<form method="post" class="card">
+  <h3>Отчёт панели</h3>
+  <textarea name="body" rows="16"
+    placeholder="Вставьте сюда отчёт панели: резюме, сильные сигналы, возражения и риски, где мнения разошлись, открытые вопросы, рекомендация.">{{ report.body if report else '' }}</textarea>
+  {% if report %}
+    <small class="muted">Сохранён {{ report.created_at[:16] | replace("T", " ") }}
+      {% if report.segments %}· сегменты: {{ report.segments }}{% endif %}</small>
+  {% endif %}
+  <div class="actions">
+    <button class="btn">Сохранить и дальше — допущения</button>
+    <button class="ghost" name="action" value="stay">Сохранить и остаться</button>
+    <a class="ghost-link" href="/initiative/{{ init.id }}/assumptions">Пропустить</a>
+  </div>
+</form>
+
+<p class="hint">Возражения панели стоит переносить в допущения руками: «не доверяют институтам»
+— это выше отток, «устали от обещаний» — ниже конверсия. Меняя допущение, понижайте грейд
+источника, если подтверждения нет.</p>
+{% endblock %}

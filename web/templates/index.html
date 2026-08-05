@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="row-between">
+  <h1>Инициативы</h1>
+  <a class="btn" href="/initiative/new">Новая инициатива</a>
+</div>
+
+{% if not items %}
+  <p class="empty">Пока пусто. Заведите первую инициативу — путь займёт несколько минут:
+  описание, сегменты, обратная связь панели, допущения, расчёт.</p>
+{% else %}
+<table class="grid">
+  <thead>
+    <tr>
+      <th>Инициатива</th><th>Тип</th><th>Продукт</th><th>Сегменты</th>
+      <th class="r">NPV</th><th>Вердикт</th><th class="r">Уверенность</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for it in items %}
+    {% set cfg = it.config_json | from_json %}
+    <tr>
+      <td>
+        <a href="/initiative/{{ it.id }}/segments"><b>{{ it.name }}</b></a>
+        {% if it.author %}<span class="muted">· {{ it.author }}</span>{% endif %}
+      </td>
+      <td class="muted">{{ it.type }}</td>
+      <td class="muted">{{ PRODUCT_NAME.get(it.product, it.product) }}</td>
+      <td class="muted">
+        {%- for s in (cfg.audience.segments if cfg.audience is defined else []) -%}
+          {{ SEGMENTS[s.id].name if s.id in SEGMENTS else s.id }}{{ ", " if not loop.last }}
+        {%- else -%}—{%- endfor -%}
+      </td>
+      <td class="r {{ 'neg' if it.npv is not none and it.npv < 0 }}">
+        {{ it.npv | mln if it.npv is not none else "—" }}</td>
+      <td>
+        {% if it.verdict %}
+          <span class="verdict-chip {{ 'bad' if 'NO-GO' in it.verdict else 'warn' if it.downgraded or 'контролем' in it.verdict else 'good' }}">
+            {{ it.verdict.split(' —')[0] }}</span>
+        {% else %}<span class="muted">не считалась</span>{% endif %}
+      </td>
+      <td class="r muted">{{ it.confidence if it.confidence is not none else "—" }}</td>
+      <td class="r">
+        {% if it.calc_id %}<a href="/calculation/{{ it.calc_id }}">расчёт</a>{% endif %}
+        {% if it.calc_count and it.calc_count > 1 %}<span class="muted">×{{ it.calc_count }}</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if calcs %}
+<h2>Последние расчёты</h2>
+<table class="grid small">
+  <thead><tr><th>Когда</th><th>Инициатива</th><th class="r">Инкремент</th>
+             <th class="r">NPV</th><th>Вердикт</th><th></th></tr></thead>
+  <tbody>
+  {% for c in calcs %}
+    <tr>
+      <td class="muted">{{ c.created_at[:16] | replace("T", " ") }}</td>
+      <td><a href="/calculation/{{ c.id }}">{{ c.initiative_name }}</a></td>
+      <td class="r">{{ c.incremental | num }}</td>
+      <td class="r {{ 'neg' if c.npv < 0 }}">{{ c.npv | mln }}</td>
+      <td class="muted">{{ c.verdict.split(' —')[0] }}</td>
+      <td class="r"><a href="/calculation/{{ c.id }}/xlsx">Excel</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

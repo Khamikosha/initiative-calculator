@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ "Описание инициативы" if init else "Новая инициатива" }}</h1>
+<p class="lead">Что оцениваем и по какому продукту. От продукта зависят возрастные правила
+банка — на следующем шаге они сразу отсекут сегменты, которым он недоступен.</p>
+
+<form method="post" action="{{ '/initiative/%d/edit'|format(init.id) if init else '/initiative/new' }}"
+      class="card form">
+  <label class="field">
+    <span>Название</span>
+    <input name="name" value="{{ init.name if init else '' }}" required autofocus
+           placeholder="например: Молодёжная карта — весенняя кампания">
+  </label>
+
+  <div class="two">
+    <label class="field">
+      <span>Тип инициативы</span>
+      <select name="type">
+        {% for k, label in TYPES %}
+          <option value="{{ k }}" {{ 'selected' if init and init.type == k }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span>Продукт</span>
+      <select name="product">
+        {% for k, label in PRODUCTS %}
+          <option value="{{ k }}" {{ 'selected' if init and init.product == k }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <label class="field">
+    <span>Описание</span>
+    <textarea name="description" rows="7"
+      placeholder="Что делаем, зачем, на кого рассчитано, какое решение принимаем по итогам. Этот текст уйдёт в бриф для панели исследования.">{{ init.description if init else '' }}</textarea>
+    <small>Чем конкретнее описание, тем полезнее обратная связь панели на следующем шаге.</small>
+  </label>
+
+  <div class="actions">
+    <button class="btn">{{ "Сохранить" if init else "Создать и выбрать сегменты" }}</button>
+    {% if init %}<a class="ghost-link" href="/">К списку</a>{% endif %}
+  </div>
+</form>
+{% endblock %}

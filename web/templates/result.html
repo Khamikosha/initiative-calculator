@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% set v = res.verdict %}
+{% set pl = res.pl %}
+{% set f = res.funnel %}
+{% block body %}
+
+<div class="row-between">
+  <h1>{{ init.name }}</h1>
+  <div>
+    <a class="btn" href="/calculation/{{ c.id }}/xlsx">Выгрузить Excel</a>
+    <a class="ghost-link" href="/initiative/{{ init.id }}/assumptions">Изменить допущения</a>
+  </div>
+</div>
+
+<div class="verdict {{ 'bad' if 'NO-GO' in v.recommendation else 'warn' if c.downgraded or 'контролем' in v.recommendation else 'good' }}">
+  <div class="verdict-text">{{ v.recommendation }}</div>
+  {% if c.downgraded %}
+    <div class="verdict-sub">По деньгам было: {{ v.recommendation_by_npv }}</div>
+  {% endif %}
+</div>
+
+<div class="tiles">
+  <div class="tile"><span>Инкрементальные клиенты</span><b>{{ f.incremental_clients | num }}</b></div>
+  <div class="tile"><span>NPV</span><b class="{{ 'neg' if pl.npv < 0 }}">{{ pl.npv | mln }}</b></div>
+  <div class="tile"><span>ROMI</span><b>{{ pl.romi if pl.romi is not none else "—" }}</b></div>
+  <div class="tile"><span>Инкрементальный CPA</span><b>{{ pl.incremental_cpa | money }}</b></div>
+  <div class="tile"><span>Окупаемость</span>
+    <b>{{ (pl.payback_months ~ " мес") if pl.payback_months else "нет" }}</b></div>
+  <div class="tile"><span>LTV / CAC</span><b>{{ pl.ltv_to_cac if pl.ltv_to_cac is not none else "—" }}</b></div>
+</div>
+
+<section class="card">
+  <h3>Сценарии</h3>
+  <p class="muted">Одна цифра здесь была бы ложной точностью. Вердикт строится по худшему и
+  лучшему сценарию, а не по тому, что назван «пессимистичным».</p>
+  <table class="grid">
+    <thead><tr><th></th><th class="r">Пессимистичный</th><th class="r">Базовый</th>
+               <th class="r">Оптимистичный</th></tr></thead>
+    <tbody>
+      {% set names = ['pessimistic', 'base', 'optimistic'] %}
+      <tr><td>Инкрементальные клиенты</td>
+        {% for n in names %}<td class="r">{{ res.scenarios[n].incremental_clients | num }}</td>{% endfor %}</tr>
+      <tr><td>NPV</td>
+        {% for n in names %}<td class="r {{ 'neg' if res.scenarios[n].npv < 0 }}">{{ res.scenarios[n].npv | mln }}</td>{% endfor %}</tr>
+      <tr><td>ROMI</td>
+        {% for n in names %}<td class="r">{{ res.scenarios[n].romi if res.scenarios[n].romi is not none else "—" }}</td>{% endfor %}</tr>
+      <tr><td>Инкрементальный CPA</td>
+        {% for n in names %}<td class="r">{{ res.scenarios[n].incremental_cpa | money }}</td>{% endfor %}</tr>
+      <tr><td>Окупаемость, мес</td>
+        {% for n in names %}<td class="r">{{ res.scenarios[n].payback_months or "нет" }}</td>{% endfor %}</tr>
+    </tbody>
+  </table>
+  {% if v.scenarios_inverted %}
+    <div class="callout bad">Инверсия сценариев: чем больше клиентов, тем хуже NPV.
+    Менять надо экономику юнита, а не объём.</div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h3>Воронка</h3>
+  <div class="funnel">
+    <div><span>Показы</span><b>{{ f.total_impressions | num }}</b></div>
+    <div><span>Охват</span><b>{{ f.combined_reach_abs | num }}</b>
+         <small>{{ f.combined_reach_share | pct }} ЦА, частота {{ f.avg_frequency }}</small></div>
+    <div><span>Заявки</span><b>{{ f.applications_total | num }}</b>
+         <small>прямые {{ f.applications_direct | num }} + brand {{ f.applications_brand_lift | num }}</small></div>
+    <div><span>Одобрено</span><b>{{ f.approved | num }}</b></div>
+    <div><span>Активировано</span><b>{{ f.activated | num }}</b></div>
+    <div class="last"><span>Инкремент</span><b>{{ f.incremental_clients | num }}</b>
+         <small>минус каннибализация {{ f.cannibalization_loss | num }}</small></div>
+  </div>
+</section>
+
+{% if res.segments and res.segments.rows %}
+<section class="card">
+  <h3>Сегменты</h3>
+  <table class="grid">
+    <thead><tr><th>Сегмент</th><th class="r">Размер</th><th class="r">Доступен продукт</th>
+               <th class="r">С возраста</th><th class="r">Эффективная ЦА</th>
+               <th class="r">Вес в клиентах</th></tr></thead>
+    <tbody>
+      {% for r in res.segments.rows %}
+      <tr class="{{ 'muted' if r.available_share == 0 }}">
+        <td>{{ r.name }}</td>
+        <td class="r">{{ r.target_size | num }}</td>
+        <td class="r">{{ r.available_share | pct(0) }}</td>
+        <td class="r">{{ r.min_age }}</td>
+        <td class="r">{{ r.effective_audience | num }}</td>
+        <td class="r">{{ r.client_weight | pct(0) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if res.frk_ladder %}
+<section class="card">
+  <h3>Лестница ФРК</h3>
+  <p class="muted">Уровни вложены: 4 ⊂ 3 ⊂ 2 ⊂ 1. Смотреть надо на предельную отдачу шага
+  вверх, а не на средний ROMI уровня.</p>
+  <table class="grid">
+    <thead><tr><th>Уровень</th><th class="r">Бюджет</th><th class="r">Охват</th>
+               <th class="r">Инкремент</th><th class="r">NPV</th>
+               <th class="r">Предельный CPA</th><th class="r">Предельный NPV</th>
+               <th>Шаг окупается</th></tr></thead>
+    <tbody>
+      {% for l in res.frk_ladder.levels %}
+      <tr class="{{ 'best' if l.frk_tier == res.frk_ladder.optimal_tier }}">
+        <td>ФРК {{ l.frk_tier }}</td>
+        <td class="r">{{ l.budget | mln }}</td>
+        <td class="r">{{ l.reach_share | pct }}</td>
+        <td class="r">{{ l.incremental_clients | num }}</td>
+        <td class="r {{ 'neg' if l.npv < 0 }}">{{ l.npv | mln }}</td>
+        <td class="r">{{ l.marginal_cpa | money if l.marginal_cpa is defined else "—" }}</td>
+        <td class="r {{ 'neg' if l.marginal_npv is defined and l.marginal_npv < 0 }}">
+          {{ l.marginal_npv | mln if l.marginal_npv is defined else "—" }}</td>
+        <td>{% if l.step_worth_it is defined %}{{ "да" if l.step_worth_it else "нет" }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p><b>{{ res.frk_ladder.note }}</b></p>
+</section>
+{% endif %}
+
+{% if res.validation %}
+<section class="card">
+  <h3>Проверка вводных</h3>
+  <ul class="warns">{% for m in res.validation %}<li>{{ m }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if res.flags %}
+<section class="card">
+  <h3>Красные флаги</h3>
+  <ul class="flags">{% for m in res.flags %}<li>{{ m }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if res.tornado %}
+<section class="card">
+  <h3>Что решает исход</h3>
+  <p class="muted">Сдвиг каждого драйвера на ±25%. Проверять до запуска стоит верхние.</p>
+  <table class="grid small">
+    <thead><tr><th>Драйвер</th><th class="r">NPV минимум</th><th class="r">NPV максимум</th>
+               <th class="r">Размах</th></tr></thead>
+    <tbody>
+      {% for t in res.tornado[:6] %}
+      <tr><td>{{ t.driver }}</td>
+        <td class="r {{ 'neg' if t.npv_low < 0 }}">{{ t.npv_low | mln }}</td>
+        <td class="r {{ 'neg' if t.npv_high < 0 }}">{{ t.npv_high | mln }}</td>
+        <td class="r">{{ t.swing | mln }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card meta-card">
+  <h3>Воспроизводимость</h3>
+  <p>Расчёт <b>№{{ c.id }}</b> от {{ c.created_at[:16] | replace("T", " ") }}
+     {% if c.author %}· {{ c.author }}{% endif %}.
+     Движок <code>{{ c.engine_version }}</code>.
+     {% if res.confidence %}Индекс уверенности {{ res.confidence.index }} ({{ res.confidence.tier }}).{% endif %}</p>
+  <p class="muted">Расчёт неизменяем: он хранит снимок конфига и версию движка. Правка допущений
+  создаёт новый расчёт, а этот останется таким, каким его показали.</p>
+  {% if history | length > 1 %}
+    <p>История: {% for h in history %}<a href="/calculation/{{ h.id }}"
+      class="{{ 'muted' if h.id != c.id }}">№{{ h.id }} ({{ h.npv | mln }})</a>{{ " · " if not loop.last }}{% endfor %}</p>
+  {% endif %}
+  {% if panel %}<p>Отчёт панели сохранён {{ panel.created_at[:16] | replace("T", " ") }} —
+    <a href="/initiative/{{ init.id }}/panel">открыть</a>.</p>{% endif %}
+  <details><summary>Снимок конфига</summary><pre>{{ c.config_snapshot }}</pre></details>
+</section>
+{% endblock %}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Калькулятор эффекта инициатив{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">Калькулятор эффекта инициатив</a>
+  <form class="who" method="post" action="/author">
+    <input type="hidden" name="back" value="{{ request.url.path }}">
+    <label>Кто вы</label>
+    <input name="author" value="{{ author }}" placeholder="имя и команда" autocomplete="off">
+    <button class="ghost">Сохранить</button>
+  </form>
+</header>
+
+{% if init is defined and init %}
+<nav class="steps">
+  <span class="step-name">{{ init.name }}</span>
+  {% for key, label in STEPS %}
+    {% if key == 'result' %}
+      <a class="step {{ 'now' if step == key }}" href="/initiative/{{ init.id }}/calculate">{{ label }}</a>
+    {% else %}
+      <a class="step {{ 'now' if step == key }}" href="/initiative/{{ init.id }}/{{ key }}">{{ label }}</a>
+    {% endif %}
+  {% endfor %}
+  <a class="step edit" href="/initiative/{{ init.id }}/edit">Описание</a>
+</nav>
+{% endif %}
+
+<main>{% block body %}{% endblock %}</main>
+
+<footer>
+  Движок <code>{{ ENGINE_VERSION }}</code> — единственный источник истины по формулам.
+  Приложение ничего не считает само.
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

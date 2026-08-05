@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Сегменты</h1>
+<p class="lead">Можно выбрать несколько. У каждого своя аудитория, воронка и юнит-экономика —
+движок сведёт их в один взвешенный прогон, а не в «среднее по палате».
+Возрастные правила банка проверяются сразу: продукт
+<b>{{ PRODUCT_NAME.get(init.product, init.product) }}</b> доступен не всем возрастам.</p>
+
+{# autocomplete=off: браузер охотно подставляет в поля с числами что-нибудь из своей памяти,
+   и человек уходит считать на цифрах, которых не вводил #}
+<form method="post" class="card" id="segform" data-product="{{ init.product }}" autocomplete="off">
+  {% for sid, meta in SEGMENTS.items() %}
+    {% set on = sid in chosen %}
+    <div class="seg {{ 'on' if on }}" data-seg="{{ sid }}">
+      <label class="seg-head">
+        <input type="checkbox" name="segments" value="{{ sid }}" {{ 'checked' if on }}>
+        <b>{{ meta.name }}</b>
+        <span class="gate" data-gate="{{ sid }}"></span>
+      </label>
+      <div class="seg-body">
+        <label class="field">
+          <span>Размер сегмента, чел</span>
+          <input name="seg.{{ sid }}.target_size" data-size="{{ sid }}" inputmode="numeric"
+                 value="{{ chosen[sid].target_size if on and chosen[sid].target_size is defined else '' }}"
+                 placeholder="сколько человек в этом сегменте">
+        </label>
+        <label class="field">
+          <span>Органические заявки, шт/мес</span>
+          <input name="seg.{{ sid }}.baseline_organic_apps_m" inputmode="numeric"
+                 value="{{ chosen[sid].baseline_organic_apps_m if on and chosen[sid].baseline_organic_apps_m is defined else '' }}"
+                 placeholder="поток без кампании">
+        </label>
+        <label class="field">
+          <span>Доля, до которой дотягиваемся</span>
+          <input name="seg.{{ sid }}.reachable_share" inputmode="decimal"
+                 value="{{ chosen[sid].reachable_share if on and chosen[sid].reachable_share is defined else '' }}"
+                 placeholder="пусто = по возрастам">
+          <small>Пусто — движок возьмёт долю подходящих возрастов при равномерном распределении.</small>
+        </label>
+      </div>
+    </div>
+  {% endfor %}
+
+  <div class="notes" id="segnotes"></div>
+
+  <div class="actions">
+    <button class="btn">Дальше — обратная связь панели</button>
+    <a class="ghost-link" href="/">К списку</a>
+  </div>
+</form>
+
+<p class="hint">Юнит-экономику каждого сегмента (баланс, оборот, отток, approval) зададите
+на шаге «Допущения» — там же можно переопределить любой параметр отдельно по сегменту.</p>
+{% endblock %}
