@@ -457,7 +457,35 @@ check("Без числа клиентов проникновение не выд
       all(r.get("penetration") is None
           for r in calc.resolve_segments(_nopen)["_segments"]["rows"]))
 
-# ---------------------------------------------------------------- 17. Все кейсы считаются
+# ------------------------------- 17. Пустой прогон не выдаётся за вердикт
+# Вскрылось на первом же живом тесте: человек прошёл путь, не задав медиаплан, и получил
+# «NO-GO — базовый сценарий не окупается» с окупаемостью 1 месяц. Ноль во всех клетках
+# читался как оценка инициативы.
+empty = copy.deepcopy(BASE)
+empty["channels"] = []
+empty["costs"] = {k: 0 for k in empty["costs"]}
+empty["costs"]["campaign_months"] = 1
+res_empty = calc.analyze(calc.resolve_segments(empty))
+check("Пустой медиаплан даёт «нечего считать», а не «не окупается»",
+      res_empty["verdict"].get("nothing_to_calculate") is True and
+      "НЕЧЕГО СЧИТАТЬ" in res_empty["verdict"]["recommendation"])
+check("Отсутствие каналов объясняется в проверке вводных",
+      any("нет ни одного канала" in m for m in res_empty["validation"]))
+check("При нулевом эффекте окупаемости нет — раньше показывалась «1 мес»",
+      res_empty["pl"]["payback_months"] is None)
+check("Окупаемость на живом кейсе по-прежнему считается",
+      calc.analyze(calc.resolve_segments(json.loads(
+          (CASES / "comms_push_base.json").read_text(encoding="utf-8")
+      )))["pl"]["payback_months"] is not None)
+
+zero_conv = copy.deepcopy(BASE)
+for ch in zero_conv["channels"]:
+    ch["cr_to_app"] = 0; ch["brand_uplift"] = 0
+check("Каналы есть, но конверсия нулевая — тоже ловится",
+      any("заявок ноль" in m for m in
+          calc.analyze(calc.resolve_segments(zero_conv))["validation"]))
+
+# ---------------------------------------------------------------- 18. Все кейсы считаются
 for path in sorted(CASES.glob("*.json")):
     try:
         r = engine(path)
