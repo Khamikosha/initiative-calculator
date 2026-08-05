@@ -71,6 +71,44 @@
   </div>
 </section>
 
+{% set e = res.pl.effect %}
+{% if e %}
+<section class="card">
+  <h3>Эффект в разных валютах</h3>
+  <p class="muted">Один и тот же прирост клиентов. Стейкхолдеры меряют разным, поэтому
+  считаем всё из одного прогона — иначе цифры разъедутся между презентациями.</p>
+  <div class="funnel">
+    <div><span>АКБ — пик активной базы</span><b>{{ e.akb_peak | num }}</b>
+         <small>на конец горизонта {{ e.akb_end | num }}</small></div>
+
+    <div><span>ОД за горизонт</span>
+      {% if e.od_total is not none %}
+        <b>{{ e.od_total | mln }}</b>
+        <small>{{ e.od_annual_per_client | money }} на клиента в год ·
+          дисконтированный {{ e.od_discounted | mln }}</small>
+      {% else %}
+        <b class="muted">нет данных</b>
+        <small>операционный доход на клиента не задан — см. «Проверку вводных»</small>
+      {% endif %}
+    </div>
+
+    <div><span>AUM / доп. объём средств</span>
+      {% if e.aum_peak is not none %}
+        <b>{{ e.aum_peak | mln }}</b>
+        <small>{{ e.funds_per_client | money }} на клиента · на конец {{ e.aum_end | mln }}</small>
+      {% else %}
+        <b class="muted">нет данных</b><small>не задан средний баланс</small>
+      {% endif %}
+    </div>
+
+    <div class="last"><span>PL — чистый эффект</span><b>{{ e.pl_npv | mln }}</b>
+         <small>недисконтированный {{ e.pl_net | mln }}</small></div>
+  </div>
+  <small class="muted">ОД — это <b>доход</b>, а не маржа: кэшбэк, обслуживание и риск он
+  не вычитает. Сравнивать его с NPV напрямую нельзя, нужны обе цифры.</small>
+</section>
+{% endif %}
+
 {% if res.segments and res.segments.rows %}
 <section class="card">
   <h3>Сегменты</h3>

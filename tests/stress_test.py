@@ -485,7 +485,25 @@ check("Каналы есть, но конверсия нулевая — тож�
       any("заявок ноль" in m for m in
           calc.analyze(calc.resolve_segments(zero_conv))["validation"]))
 
-# ---------------------------------------------------------------- 18. Все кейсы считаются
+# ------------------------------- 18. Отсутствие ОД не молчит
+# Живой тест: на детском вкладе эффект в ОД остался пустым, и человек не мог понять,
+# это ноль эффекта или отсутствие данных. Таблица ОД начинается с 14 лет.
+kids_case = json.loads((CASES / "product_kids_deposit.json").read_text(encoding="utf-8"))
+r_kids = calc.analyze(calc.resolve_segments(kids_case))
+check("Отсутствие данных по ОД объясняется, а не молчит",
+      any("ДАННЫХ НЕТ" in m and "Дети" in m for m in r_kids["validation"]))
+check("ОД пустой, а не нулевой — разницу видно",
+      r_kids["pl"]["effect"]["od_total"] is None)
+check("Остальные валюты при этом считаются",
+      r_kids["pl"]["effect"]["akb_peak"] > 0 and r_kids["pl"]["effect"]["pl_npv"] != 0)
+
+r_youth = calc.analyze(calc.resolve_segments(json.loads(
+    (CASES / "product_youth_deposit.json").read_text(encoding="utf-8"))))
+check("Там, где данные есть, лишнего сообщения нет",
+      not any("ДАННЫХ НЕТ" in m for m in r_youth["validation"]) and
+      r_youth["pl"]["effect"]["od_total"] > 0)
+
+# ---------------------------------------------------------------- 19. Все кейсы считаются
 for path in sorted(CASES.glob("*.json")):
     try:
         r = engine(path)
