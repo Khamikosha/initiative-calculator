@@ -16,7 +16,8 @@
         "value_per_client": 120,
         "approval_rate": 0.98,
         "activation_rate": 0.45,
-        "cannibalization": 0.05
+        "cannibalization": 0.05,
+        "monthly_churn": 0.02
       }
     ]
   },

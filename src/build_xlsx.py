@@ -124,6 +124,10 @@ inp("servicing", "Стоимость обслуживания", q("unit_economic
 inp("cor", "Cost of Risk (годовой)", q("unit_economics", "cor_annual"), "%", "риски / A", "ОБЯЗАТЕЛЬНО для кредитных продуктов. Для дебетовых 0.", PCT, True)
 inp("ramp", "Ramp-up маржи", q("unit_economics", "ramp_months", 1), "мес", "BI / B", "За сколько месяцев клиент выходит на полную маржу. Маржа множится на МИН(1; месяц/ramp).")
 inp("churn", "Месячный отток", q("unit_economics", "monthly_churn"), "%", "BI / A", "Доля активных, отваливающихся за месяц. Определяет LTV.", PCT, True)
+inp("od", "ОД на клиента в год", q("unit_economics", "operating_income_annual"), "₽/год",
+    "отчётность / A",
+    "Операционный доход на клиента за год. Это ДОХОД, а не маржа: кэшбэк, обслуживание "
+    "и риск он не вычитает. Нужен для строки «эффект в ОД» на листе «Итог».", CUR)
 inp("mode", "Режим экономики клиента", q("unit_economics", "mode", "build_up"), "", "решение",
     "build_up — собрать снизу вверх из строк выше. value_per_client — взять готовую "
     "дисконтированную ценность клиента одним числом (строка ниже); тогда строки выше "
@@ -204,7 +208,7 @@ if SEG:
                 "по свидетельству о рождении; с 6 лет — детская карта и копилки в детском приложении; с 14 — "
                 "вход в приложение, накопительные продукты, брокерский счёт, подписка и лояльность; с 18 — всё.")
     sg["A3"].font = NOTE
-    sg.merge_cells("A3:AD3")
+    sg.merge_cells("A3:AE3")
 
     SEG_HDR = [("Сегмент", 22), ("Ключ", 9), ("Включён", 10), ("Размер сегмента, чел", 16),
                ("Продукт доступен с, лет", 14), ("Доля доступных возрастов", 14),
@@ -214,7 +218,7 @@ if SEG:
                ("Комиссии/мес", 12), ("Кэшбэк", 9), ("Обслуживание/мес", 13), ("CoR", 9),
                ("Ramp-up, мес", 11), ("Отток/мес", 10), ("Выплата за привлечение", 14),
                ("вес: одобренные", 13), ("вес: клиенты", 12), ("база баланса", 13),
-               ("база оборота", 13), ("Доля в клиентах", 12), ("Ценность клиента, ₽", 15)]
+               ("база оборота", 13), ("Доля в клиентах", 12), ("Ценность клиента, ₽", 15), ("ОД на клиента/год, ₽", 15)]
     for i, (h, w) in enumerate(SEG_HDR, 1):
         c = sg.cell(5, i, h); c.font = H2; c.fill = FILL_H; c.border = THIN
         c.alignment = Alignment(wrap_text=True, vertical="center")
@@ -223,13 +227,13 @@ if SEG:
 
     SEG_FMT = {4: NUM, 5: NUM, 6: PCT, 7: PCT, 8: NUM, 9: NUM, 10: PCT, 11: PCT, 12: PCT, 13: PCT,
                14: CUR, 15: PCT, 16: CUR, 17: PCT2, 18: CUR, 19: PCT2, 20: CUR, 21: PCT,
-               22: NUM2, 23: PCT, 24: CUR, 25: NUM, 26: NUM, 27: NUM, 28: NUM, 29: PCT, 30: CUR}
+               22: NUM2, 23: PCT, 24: CUR, 25: NUM, 26: NUM, 27: NUM, 28: NUM, 29: PCT, 30: CUR, 31: CUR}
     SEG_KEYS = {4: "target_size", 6: "available_share", 7: "reachable_share", 9: "organic_apps_m",
                 10: "approval_rate", 11: "activation_rate", 12: "cannibalization", 13: "deadweight",
                 14: "avg_balance", 15: "nim_annual", 16: "monthly_turnover", 17: "interchange_rate",
                 18: "fee_income_m", 19: "cashback_rate", 20: "servicing_cost_m", 21: "cor_annual",
                 22: "ramp_months", 23: "monthly_churn", 24: "acq_cost_per_client",
-                30: "value_per_client"}
+                30: "value_per_client", 31: "operating_income_annual"}
     SEG_FIRST = 6
     for k, srow in enumerate(SEG["rows"]):
         i = SEG_FIRST + k
@@ -270,7 +274,7 @@ if SEG:
     sg.cell(TOT, 9, f"=SUM({_rng('I')})")
     for col, base in (("J", "H"), ("K", "Y"), ("L", "Z"), ("M", "Z"), ("N", "Z"), ("O", "AA"),
                       ("P", "Z"), ("Q", "AB"), ("R", "Z"), ("S", "AB"), ("T", "Z"), ("U", "AA"),
-                      ("V", "Z"), ("W", "Z"), ("X", "Z"), ("AD", "Z")):
+                      ("V", "Z"), ("W", "Z"), ("X", "Z"), ("AD", "Z"), ("AE", "Z")):
         sg.cell(TOT, cix(col), _weighted(base, col))
     for col in list(SEG_FMT) + [1]:
         c = sg.cell(TOT, col)
@@ -285,7 +289,7 @@ if SEG:
                      ("cannib", "L"), ("deadweight", "M"), ("balance", "N"), ("nim", "O"),
                      ("turnover", "P"), ("interchange", "Q"), ("fee", "R"), ("cashback", "S"),
                      ("servicing", "T"), ("cor", "U"), ("ramp", "V"), ("churn", "W"), ("acq", "X"),
-                     ("value_pc", "AD")):
+                     ("value_pc", "AD"), ("od", "AE")):
         c = ws.cell(R[key], 2, f"=Сегменты!${col}${TOT}")
         c.font = GREEN; c.fill = FILL_RES
         ws.cell(R[key], 4, "лист «Сегменты»").font = BLACK
@@ -578,6 +582,16 @@ for i in range(2, 9):
         f'=IF({V["mode"]}="value_per_client","не считается",'
         f'IF(MIN({rng})=0,"нет",MIN({rng})))')
     m.cell(MR["payback"], i).font = GREEN
+
+block("ЭФФЕКТ В РАЗНЫХ ВАЛЮТАХ")
+row_pl("akb_peak", "АКБ — пик активной базы, чел", 0, agg="MAX", fmt=NUM,
+       note="Максимум активных клиентов за горизонт. Валюта маркетинга.")
+row_pl("cl_months", "Клиенто-месяцев", 0, agg="SUM", fmt=NUM,
+       note="Сумма активных по месяцам. База для пересчёта годового ОД в эффект за горизонт.")
+row("od_total", "ОД за горизонт", f'{{c}}{MR["cl_months"]}*{V["od"]}/12', CUR,
+    "Клиенто-месяцы × годовой ОД / 12. ДОХОД, а не маржа: с NPV несопоставим напрямую.")
+row("aum_peak", "AUM / доп. объём средств, пик", f'{{c}}{MR["akb_peak"]}*{V["balance"]}', CUR,
+    "Пик активной базы × средний баланс. Валюта розницы.")
 
 block("МЕТРИКИ ЭФФЕКТИВНОСТИ")
 row("mkt", "Маркетинговые затраты",

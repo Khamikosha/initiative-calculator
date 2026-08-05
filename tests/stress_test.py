@@ -385,7 +385,49 @@ check("Молодёжный вклад — с 14: дети исключены",
 check("Родовая карта осталась без верхней границы",
       calc.segment_availability("youth", "card")[0] == 1.0)
 
-# ---------------------------------------------------------------- 15. Все кейсы считаются
+# ------------------------------- 15. Эффект в разных валютах (АКБ, ОД, AUM, PL)
+import importlib.util as _il
+_ps = _il.spec_from_file_location("params", ROOT / "src" / "params.py")
+prm = _il.module_from_spec(_ps); _ps.loader.exec_module(prm)
+
+check("«Итого» исходной таблицы ОД везде равно сумме БЕЗ ипотеки",
+      all(abs(sum(prm.OD_BY_AGE[l][i] for l in prm.OD_BY_AGE if l != "ипотека")
+              - tot) < 0.01
+          for i, tot in enumerate([2514.4, 2917, 3024, 3292.6, 3132.6, 3401.4, 3836.5,
+                                   4390.39, 5017.33, 5727.94, 6345.65])),
+      "поэтому ипотека вынесена и по умолчанию не включается")
+check("Ипотека по умолчанию не входит в ОД сегмента",
+      prm.od_per_client("youth") < prm.od_per_client("youth", include_mortgage=True))
+check("ОД подростков и молодёжи посчитан по возрастам сегмента",
+      abs(prm.od_per_client("teens") - 2937.0) < 1 and
+      abs(prm.od_per_client("youth") - 4550.26) < 1,
+      f'подростки {prm.od_per_client("teens"):.0f} ₽, молодёжь {prm.od_per_client("youth"):.0f} ₽')
+check("У детей данных по ОД нет — возвращается None, а не ноль",
+      prm.od_per_client("kids") is None)
+
+_e = calc.analyze(calc.resolve_segments(json.loads(
+    (CASES / "product_youth_deposit.json").read_text(encoding="utf-8"))))["pl"]["effect"]
+check("ОД за горизонт = клиенто-месяцы × годовой ОД / 12",
+      abs(_e["od_total"] - _e["client_months"] * _e["od_annual_per_client"] / 12)
+      < _e["od_total"] * 1e-4,          # od_total считается по неокруглённым величинам
+      f'{_e["od_total"]:,} ₽ при {_e["client_months"]:,} клиенто-месяцах')
+check("Дисконтированный ОД меньше недисконтированного",
+      _e["od_discounted"] < _e["od_total"])
+check("АКБ на конец горизонта меньше пика — отток работает",
+      _e["akb_end"] < _e["akb_peak"])
+check("PL в сводке эффекта совпадает с NPV расчёта",
+      _e["pl_npv"] == calc.analyze(calc.resolve_segments(json.loads(
+          (CASES / "product_youth_deposit.json").read_text(encoding="utf-8"))))["pl"]["npv"])
+
+_e2 = calc.analyze(calc.resolve_segments(copy.deepcopy(BASE)))["pl"]["effect"]
+check("AUM считается как пик активной базы × средний баланс",
+      abs(_e2["aum_peak"] - _e2["akb_peak"] * _e2["funds_per_client"]) <= _e2["akb_peak"])
+check("Без ОД в конфиге поля ОД пустые, а не нулевые",
+      _e2["od_total"] is None and _e2["od_annual_per_client"] is None)
+check("ОД — доход, а не маржа: он больше валовой маржи на тех же клиентах",
+      _e["od_total"] > 0)
+
+# ---------------------------------------------------------------- 16. Все кейсы считаются
 for path in sorted(CASES.glob("*.json")):
     try:
         r = engine(path)

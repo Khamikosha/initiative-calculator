@@ -16,7 +16,9 @@
         "value_per_client": 418,
         "approval_rate": 0.95,
         "activation_rate": 0.6,
-        "cannibalization": 0.12
+        "cannibalization": 0.12,
+        "operating_income_annual": 2937.0,
+        "monthly_churn": 0.03
       },
       {
         "id": "youth",
@@ -26,7 +28,9 @@
         "value_per_client": 795,
         "approval_rate": 0.85,
         "activation_rate": 0.65,
-        "cannibalization": 0.25
+        "cannibalization": 0.25,
+        "operating_income_annual": 4550.26,
+        "monthly_churn": 0.04
       }
     ]
   },

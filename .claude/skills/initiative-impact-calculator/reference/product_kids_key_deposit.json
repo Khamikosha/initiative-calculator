@@ -16,7 +16,8 @@
         "value_per_client": 14670,
         "approval_rate": 0.98,
         "activation_rate": 0.45,
-        "cannibalization": 0.05
+        "cannibalization": 0.05,
+        "monthly_churn": 0.02
       },
       {
         "id": "teens",
@@ -26,7 +27,9 @@
         "value_per_client": 9805,
         "approval_rate": 0.95,
         "activation_rate": 0.6,
-        "cannibalization": 0.12
+        "cannibalization": 0.12,
+        "operating_income_annual": 2937.0,
+        "monthly_churn": 0.03
       }
     ]
   },

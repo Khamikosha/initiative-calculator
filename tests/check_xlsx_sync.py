@@ -35,7 +35,8 @@ if name is None:
 m = wb[name]
 
 # Строки листа «Модель» ищем по подписи, а не по номеру: номера едут при любой правке модели.
-LABELS = {"инкремент": "ИНКРЕМЕНТАЛЬНЫЕ КЛИЕНТЫ", "NPV": "NPV"}
+LABELS = {"инкремент": "ИНКРЕМЕНТАЛЬНЫЕ КЛИЕНТЫ", "NPV": "NPV",
+          "АКБ": "АКБ — пик активной базы, чел", "ОД": "ОД за горизонт"}
 ROW = {}
 for key, label in LABELS.items():
     found = [c.row for c in m["A"] if isinstance(c.value, str) and c.value.strip() == label]
@@ -71,6 +72,15 @@ if ladder:
 for name, s in calc.SCEN.items():
     f_, p_ = calc.evaluate(calc.apply_scenario(cfg, s))
     compare(name, SCEN_COL[name], p_["npv"], f_["incremental_clients"])
+
+# Эффект в разных валютах сверяется отдельно: NPV может сойтись, а АКБ и ОД разъехаться —
+# они считаются по другой цепочке (пик активной базы и клиенто-месяцы).
+_f, _p = calc.evaluate(cfg)
+eff_rows = []
+for title, key, want in (("АКБ, пик", "АКБ", _p["effect"]["akb_peak"]),
+                         ("ОД за горизонт", "ОД", _p["effect"]["od_total"] or 0)):
+    got = cell(SCEN_COL["base"], key)
+    eff_rows.append((title, want, got, abs(got - want) <= max(1.0, abs(want) * 1e-6)))
 
 # ---------------------------------------------------------------- флаги и вердикт
 # Совпадения NPV мало: движок и книга могут сойтись в цифрах и разойтись в том, что
@@ -117,8 +127,12 @@ for mk, in_eng, in_xl in mismatch:
     print(f"  ✗ «{mk}»: движок {'есть' if in_eng else 'нет'}, книга {'есть' if in_xl else 'нет'}")
 print(f"Вердикт понижен по качеству данных: движок {v_eng}, книга {v_xl} — "
       f"{'совпадают' if verdict_ok else 'РАСХОЖДЕНИЕ'}")
+for title, want, got, good in eff_rows:
+    print(f"{title:>16}: движок {want:>16,.0f}  книга {got:>16,.0f}  "
+          f"{'OK' if good else 'РАСХОЖДЕНИЕ'}")
 
-bad = sum(1 for r in rows if not r[-1]) + len(mismatch) + (0 if verdict_ok else 1)
+bad = (sum(1 for r in rows if not r[-1]) + len(mismatch) + (0 if verdict_ok else 1)
+       + sum(1 for r in eff_rows if not r[-1]))
 if bad:
     print(f"\n✗ Расхождений: {bad}. Excel и движок считают или говорят по-разному — "
           "инвариант проекта нарушен.")

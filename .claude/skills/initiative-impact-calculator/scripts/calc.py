@@ -101,7 +101,7 @@ def resolve_segments(cfg):
                "acq_cost_per_client": g(s, "acq_cost_per_client", g(kt, "acq_cost_per_client"))}
         for k in ("avg_balance", "nim_annual", "monthly_turnover", "interchange_rate", "fee_income_m",
                   "cashback_rate", "servicing_cost_m", "cor_annual", "ramp_months", "monthly_churn",
-                  "value_per_client"):
+                  "value_per_client", "operating_income_annual"):
             row[k] = g(s, k, g(ue, k, 1.0 if k == "ramp_months" else 0.0))
         if avail <= 0:
             notes.append(f"СЕГМЕНТ ИСКЛЮЧЁН: «{meta['name']}» — продукт «{product}» доступен "
@@ -150,7 +150,8 @@ def resolve_segments(cfg):
     # ценность клиента взвешивается по числу клиентов: суммарная ценность = Σ клиенты_i × ценность_i,
     # поэтому среднее по клиентам даёт ту же сумму точно, а не приблизительно
     for k in ("avg_balance", "monthly_turnover", "fee_income_m", "servicing_cost_m",
-              "ramp_months", "monthly_churn", "value_per_client"):
+              "ramp_months", "monthly_churn", "value_per_client",
+              "operating_income_annual"):
         ue[k] = _wavg([(w, r[k]) for w, r in cl_w])
     for k, base in (("nim_annual", bal_w), ("cor_annual", bal_w),
                     ("interchange_rate", turn_w), ("cashback_rate", turn_w)):
@@ -181,7 +182,7 @@ UE_KEYS = {"avg_balance": (0.0, 1e9), "nim_annual": (-1.0, 1.0), "monthly_turnov
            "interchange_rate": _RATE, "fee_income_m": (0.0, 1e7), "cashback_rate": _RATE,
            "servicing_cost_m": (0.0, 1e6), "cor_annual": _RATE,
            "ramp_months": (0.0, 120.0), "monthly_churn": _RATE,
-           "value_per_client": (0.0, 1e7)}
+           "value_per_client": (0.0, 1e7), "operating_income_annual": (0.0, 1e7)}
 FUNNEL_KEYS = {"approval_rate": _RATE, "activation_rate": _RATE,
                "cannibalization": _RATE, "deadweight": _RATE}
 
@@ -381,6 +382,37 @@ def monthly_margin(u, month_index):
     cost = turn * g(u, "cashback_rate") + g(u, "servicing_cost_m") + bal * g(u, "cor_annual") / 12.0
     return (rev - cost) * ramp
 
+def effect_summary(u, rows, r_m, net, npv):
+    """Один и тот же прирост клиентов, посчитанный в разных валютах.
+
+    Стейкхолдеры меряют разным: маркетинг — АКБ, финансы — ОД и PL, розница — AUM
+    и дополнительный объём средств. Считаем всё из одного прогона, иначе цифры
+    разъедутся между презентациями и спорить будут о них, а не о решении.
+
+    ОД — это ДОХОД, а не маржа: он не вычитает кэшбэк, обслуживание и риск. Сравнивать
+    его с NPV напрямую нельзя, это разные вещи, и обе нужны.
+    """
+    od = g(u, "operating_income_annual")
+    bal = g(u, "avg_balance")
+    peak = max((x["active_clients"] for x in rows), default=0.0)
+    end = rows[-1]["active_clients"] if rows else 0.0
+    client_months = sum(x["active_clients"] for x in rows)
+    od_total = client_months * od / 12.0
+    od_disc = sum(x["active_clients"] * od / 12.0 / ((1 + r_m) ** (i + 1))
+                  for i, x in enumerate(rows))
+    return {
+        "akb_peak": round(peak), "akb_end": round(end), "client_months": round(client_months),
+        "od_annual_per_client": round(od) if od else None,
+        "od_total": round(od_total) if od else None,
+        "od_discounted": round(od_disc) if od else None,
+        # доп. объём средств на продуктах = баланс инкрементальных клиентов
+        "aum_peak": round(peak * bal) if bal else None,
+        "aum_end": round(end * bal) if bal else None,
+        "funds_per_client": round(bal) if bal else None,
+        "pl_net": round(net), "pl_npv": round(npv),
+    }
+
+
 def run_pl(cfg, funnel):
     h = int(g(cfg["meta"], "horizon_months", 24))
     r_m = (1 + g(cfg["meta"], "discount_rate_annual", 0.20)) ** (1 / 12.0) - 1
@@ -419,7 +451,9 @@ def run_pl(cfg, funnel):
                      "costs": cost, "net": net, "cumulative": cum, "cumulative_discounted": cum_disc})
     total_gm = sum(r["gross_margin"] for r in rows); total_cost = sum(r["costs"] for r in rows)
     mkt_cost = media + g(k, "production") + acq_total
-    return {"horizon_months": h, "mode": MODE_VALUE if value_mode else MODE_BUILD_UP,
+    effect = effect_summary(u, rows, r_m, total_gm - total_cost, cum_disc)
+    return {"horizon_months": h, "effect": effect,
+            "mode": MODE_VALUE if value_mode else MODE_BUILD_UP,
             "value_per_client": round(value) if value_mode else None,
             "gross_clients_paid": round(gross),
             "acquisition_payout_total": round(acq_total),
@@ -570,6 +604,13 @@ def validate(cfg, f, pl):
             out.append(f"ОШИБКА ВВОДА: ценность посчитана за {vh} мес, а горизонт оценки {h} мес. "
                        "Затраты считаются на свой горизонт, а ценность приходит целиком — "
                        "цифры несопоставимы. Выровняйте горизонты.")
+        # Отток НЕ влияет на NPV в этом режиме — он уже внутри присланной ценности. Но АКБ,
+        # ОД и AUM считаются по живой кривой активной базы, и при нулевом оттоке клиент
+        # не отваливается никогда: клиенто-месяцы, а с ними ОД и AUM, уходят в потолок.
+        if g(u, "monthly_churn") <= 0 and (g(u, "operating_income_annual") or g(u, "avg_balance")):
+            out.append("ВНИМАНИЕ: отток = 0. На NPV это не влияет (отток внутри ценности клиента), "
+                       "но АКБ, ОД и AUM считаются по активной базе — при нулевом оттоке она "
+                       "не убывает, и эти три цифры завышены. Задайте отток хотя бы 1–2% в месяц.")
         stale = [k for k in ("avg_balance", "monthly_turnover", "nim_annual", "interchange_rate",
                              "cashback_rate", "servicing_cost_m", "cor_annual") if g(u, k)]
         if stale:
