@@ -20,6 +20,7 @@ help:
 	@echo "make check-all                    — сверка Excel с движком по всем кейсам"
 	@echo "make sync                         — синхронизировать копию движка в навыке"
 	@echo "make cases                        — прогнать все кейсы разом"
+	@echo "make backup [KEEP=20]             — снимок базы расчётов в .data/backups/"
 
 calc:
 	@$(PY) src/calc.py $(CASE)
@@ -75,5 +76,12 @@ test-web: $(VENV)/bin/uvicorn
 
 test-all: check-all test-web
 
+# Снимок базы. Через Connection.backup(), а не cp: база в режиме WAL, и копия файла
+# унесла бы снимок без последних транзакций — то есть без самых свежих расчётов.
+KEEP ?= 20
+backup:
+	@$(PY) tests/backup.py $(KEEP)
+
+# .data здесь НЕТ и быть не должно: это рабочие расчёты, а не мусор сборки.
 clean:
 	@rm -rf __pycache__ src/__pycache__ tests/__pycache__ web/__pycache__ .pytest_cache $(BUILD)
