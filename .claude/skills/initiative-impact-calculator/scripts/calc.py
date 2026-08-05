@@ -295,7 +295,7 @@ def build_funnel(cfg):
 
     for c in cfg.get("channels", []):
         kind = c.get("kind", "perform"); budget = g(c, "budget")
-        media_cost += budget
+        media_cost += budget; brand_before = brand_uplift_weighted
         if kind == "internal":
             impr = g(c, "reach_abs")
             apps = impr * g(c, "response_rate") * g(c, "cr_to_app")
@@ -313,9 +313,11 @@ def build_funnel(cfg):
                 eff = min(1.0, freq / g(c, "effective_freq_target", 3.0))
                 brand_uplift_weighted += g(c, "brand_uplift") * r_share * eff
         total_impr += impr; reach_complement *= (1.0 - r_share)
+        brand_add = brand_uplift_weighted - brand_before
         ch_out.append({"name": c.get("name", kind), "kind": kind, "budget": round(budget),
                        "impressions": round(impr), "reach_share": round(r_share, 4),
                        "freq": round(freq, 2), "applications": round(apps),
+                       "brand_contribution": round(brand_add, 6),
                        "cost_per_app": round(budget / apps) if apps > 0 else None})
 
     combined_reach = 1.0 - reach_complement
@@ -492,6 +494,16 @@ def validate(cfg, f, pl):
         out.append("ВНИМАНИЕ: отток = 0, клиент живёт вечно. LTV и NPV завышены — поставьте хотя бы 1–2% в месяц.")
     # насыщение канала: добавочный бюджет уже не работает
     for c in f["channels"]:
+        # Канал съедает бюджет и не даёт ничего. Обычно это неверный тип: internal считает
+        # отклик от «охвата базы» и не смотрит на CPM и CTR, поэтому perform-канал, помеченный
+        # как internal, тихо превращает весь бюджет в ноль заявок. Модель при этом считает
+        # без ошибок — ровно тот случай, который ловит этот блок.
+        if c["budget"] > 0 and c["applications"] == 0 and not c["brand_contribution"]:
+            need = {"internal": "«Охват базы» и response rate",
+                    "perform": "CPM и CTR", "brand": "CPM и brand uplift"}[c["kind"]]
+            out.append(f"БЮДЖЕТ ВПУСТУЮ: канал «{c['name']}» типа {c['kind']} тратит "
+                       f"{c['budget']:,} ₽ и не даёт ни одной заявки и ни капли brand-эффекта. "
+                       f"Для типа {c['kind']} нужны {need} — проверьте тип канала и конверсии.")
         if c["kind"] == "brand" and c["reach_share"] >= 0.97 and c["freq"] >= 4.5:
             out.append(f"НАСЫЩЕНИЕ: канал «{c['name']}» упёрся в потолок — охват {c['reach_share']:.0%}, "
                        f"частота {c['freq']}. Дополнительный бюджет сюда НЕ даёт дополнительных заявок вообще. "
