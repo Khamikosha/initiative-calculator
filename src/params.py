@@ -169,13 +169,65 @@ OD_BY_AGE = {
 OD_EXCLUDED_BY_DEFAULT = ("ипотека",)
 
 
-def od_per_client(segment_id, lines=None, include_mortgage=False):
-    """Средний ОД на клиента в год для возрастов сегмента, ₽.
+# ------------------------------------------------------------ КЛИЕНТЫ ПО ГОДАМ ЖИЗНИ
+# Клиентская база банка по годам жизни, чел. Свой факт — грейд A.
+# Подсегменты источника (0–5, 6–13, 14–17, 18–24) не совпадают с сегментами модели:
+# первые два вместе образуют kids (0–13).
+#
+# Форма распределения сама по себе — сообщение: это не демография, а накопление базы
+# с возрастом. В 6 лет клиентов 110 тыс., в 13 — 955 тыс., в девять раз больше.
+# Банк набирает детей постепенно, и весь незанятый рынок сосредоточен в младших возрастах.
+AGE_CLIENTS = {
+    0: 1_000, 1: 4_000, 2: 6_500, 3: 9_000, 4: 13_000, 5: 16_500,
+    6: 110_000, 7: 305_000, 8: 460_000, 9: 635_000,
+    10: 760_000, 11: 855_000, 12: 920_000, 13: 955_000,
+    14: 967_500, 15: 1_053_000, 16: 1_197_000, 17: 1_278_000,
+    18: 1_292_700, 19: 1_292_700, 20: 1_311_300, 21: 1_404_300,
+    22: 1_376_400, 23: 1_348_500, 24: 1_274_100,
+}
+# Размер рынка по подсегментам, чел. Разбивки по годам нет — считаем равномерной.
+MARKET_BY_AGES = {(6, 13): 11_000_000, (14, 17): 6_000_000, (18, 24): 10_500_000}
 
-    Усреднение равномерное по годам жизни: своего распределения клиентов по возрастам
-    внутри сегмента у нас пока нет. Для молодёжи это заметное упрощение — ОД растёт
-    с 3 133 ₽ в 18 лет до 6 346 ₽ в 24, вдвое. Кампания на 18–19 и кампания на 23–24
-    дадут разный ОД, а модель покажет один и тот же.
+
+def segment_ages(segment_id):
+    seg = calc.SEGMENTS[segment_id]
+    return [a for a in range(seg["age_min"], seg["age_max"] + 1)]
+
+
+def clients_in_segment(segment_id):
+    return sum(AGE_CLIENTS.get(a, 0) for a in segment_ages(segment_id))
+
+
+def market_in_segment(segment_id):
+    """Рынок сегмента: сумма подсегментов рынка, попадающих в его возрастные рамки."""
+    ages = set(segment_ages(segment_id))
+    total = 0.0
+    for (lo, hi), size in MARKET_BY_AGES.items():
+        span = [a for a in range(lo, hi + 1) if a in ages]
+        if span:
+            total += size * len(span) / (hi - lo + 1)     # рынок равномерен по годам
+    return total or None
+
+
+def penetration(segment_id):
+    """Доля рынка, уже являющаяся клиентами банка.
+
+    Главное следствие для модели: при высоком проникновении «привлечение» на деле
+    оказывается кросс-продажей. Модель считает охват против всей ЦА, поэтому если
+    инициатива про НОВЫХ клиентов, знаменателем должен быть незанятый рынок,
+    а не весь. См. предупреждение в calc.validate().
+    """
+    mk = market_in_segment(segment_id)
+    return clients_in_segment(segment_id) / mk if mk else None
+
+
+def od_per_client(segment_id, lines=None, include_mortgage=False):
+    """ОД на клиента в год для сегмента, ₽ — взвешенный по числу клиентов каждого возраста.
+
+    Взвешивание по клиентам, а не равномерное по годам: у старших возрастов и ОД выше,
+    и клиентов больше, поэтому равномерное среднее занижало бы результат. На практике
+    поправка мелкая (+1,0% у подростков, +0,1% у молодёжи) — распределение почти ровное.
+    Но это уже свой факт, а не допущение, и грейд источника поднимается с C до A.
     """
     seg = calc.SEGMENTS[segment_id]
     ages = [a for a in OD_AGES if seg["age_min"] <= a <= seg["age_max"]]
@@ -185,7 +237,11 @@ def od_per_client(segment_id, lines=None, include_mortgage=False):
         lines = [k for k in OD_BY_AGE
                  if include_mortgage or k not in OD_EXCLUDED_BY_DEFAULT]
     idx = {a: i for i, a in enumerate(OD_AGES)}
-    return sum(sum(OD_BY_AGE[l][idx[a]] for l in lines) for a in ages) / len(ages)
+    weights = [AGE_CLIENTS.get(a, 0) for a in ages]
+    if not sum(weights):
+        weights = [1] * len(ages)
+    return (sum(sum(OD_BY_AGE[l][idx[a]] for l in lines) * w for a, w in zip(ages, weights))
+            / sum(weights))
 
 
 def od_breakdown(segment_id, include_mortgage=False):
@@ -457,7 +513,9 @@ def _assert_consistent():
             "Реестр каналов разошёлся с calc.CHANNEL_KEYS.\n"
             f"  только в реестре: {sorted(ch_reg - ch_eng)}\n"
             f"  только в движке:  {sorted(ch_eng - ch_reg)}")
-    scoped = {p.key for p in SEGMENT_SCOPED} | {"id", "reachable_share"}
+    # id, reachable_share и existing_clients живут только внутри сегмента: в разделах
+    # конфига их нет, поэтому в SECTIONS они не попадают, а в SEGMENT_KEYS есть
+    scoped = {p.key for p in SEGMENT_SCOPED} | {"id", "reachable_share", "existing_clients"}
     if scoped != set(calc.SEGMENT_KEYS):
         raise RuntimeError(
             "Посегментные параметры разошлись с calc.SEGMENT_KEYS.\n"

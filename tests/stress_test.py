@@ -398,10 +398,9 @@ check("«Итого» исходной таблицы ОД везде равно
       "поэтому ипотека вынесена и по умолчанию не включается")
 check("Ипотека по умолчанию не входит в ОД сегмента",
       prm.od_per_client("youth") < prm.od_per_client("youth", include_mortgage=True))
-check("ОД подростков и молодёжи посчитан по возрастам сегмента",
-      abs(prm.od_per_client("teens") - 2937.0) < 1 and
-      abs(prm.od_per_client("youth") - 4550.26) < 1,
-      f'подростки {prm.od_per_client("teens"):.0f} ₽, молодёжь {prm.od_per_client("youth"):.0f} ₽')
+check("ОД сегмента считается только по его возрастам",
+      prm.od_per_client("teens") < prm.od_per_client("youth"),
+      f'подростки {prm.od_per_client("teens"):.0f} ₽ < молодёжь {prm.od_per_client("youth"):.0f} ₽')
 check("У детей данных по ОД нет — возвращается None, а не ноль",
       prm.od_per_client("kids") is None)
 
@@ -427,7 +426,38 @@ check("Без ОД в конфиге поля ОД пустые, а не нул�
 check("ОД — доход, а не маржа: он больше валовой маржи на тех же клиентах",
       _e["od_total"] > 0)
 
-# ---------------------------------------------------------------- 16. Все кейсы считаются
+# ------------------------------- 16. Распределение клиентов по возрастам и проникновение
+check("Доли внутри подсегментов суммируются в 100%",
+      abs(prm.clients_in_segment("kids") - 5_050_000) < 1 and
+      abs(prm.clients_in_segment("teens") - 4_495_500) < 1 and
+      abs(prm.clients_in_segment("youth") - 9_300_000) < 1,
+      f'дети {prm.clients_in_segment("kids"):,}, подростки {prm.clients_in_segment("teens"):,}, '
+      f'молодёжь {prm.clients_in_segment("youth"):,}')
+check("Проникновение растёт от детей к молодёжи",
+      prm.penetration("kids") < prm.penetration("teens") < prm.penetration("youth"),
+      f'{prm.penetration("kids"):.0%} → {prm.penetration("teens"):.0%} → {prm.penetration("youth"):.0%}')
+check("ОД взвешен по клиентам, а не равномерно по годам",
+      abs(prm.od_per_client("teens") - 2966) < 2 and abs(prm.od_per_client("youth") - 4555) < 2,
+      f'подростки {prm.od_per_client("teens"):.0f} ₽ (равномерно было 2937), '
+      f'молодёжь {prm.od_per_client("youth"):.0f} ₽ (было 4550)')
+check("Клиентов в 13 лет в девять раз больше, чем в 6 — база копится с возрастом",
+      prm.AGE_CLIENTS[13] / prm.AGE_CLIENTS[6] > 8)
+
+_pen = calc.resolve_segments(json.loads(
+    (CASES / "product_youth_deposit.json").read_text(encoding="utf-8")))
+check("Высокое проникновение вызывает предупреждение",
+      any("ПРОНИКНОВЕНИЕ" in n for n in _pen["_segments"]["notes"]))
+check("Предупреждение различает привлечение и кросс-продажу",
+      any("кросс-продаж" in n for n in _pen["_segments"]["notes"]))
+check("Проникновение попадает в строку сегмента",
+      all(r["penetration"] is not None for r in _pen["_segments"]["rows"]))
+_nopen = copy.deepcopy(BASE)
+check("Без числа клиентов проникновение не выдумывается",
+      calc.resolve_segments(_nopen).get("_segments") is None or
+      all(r.get("penetration") is None
+          for r in calc.resolve_segments(_nopen)["_segments"]["rows"]))
+
+# ---------------------------------------------------------------- 17. Все кейсы считаются
 for path in sorted(CASES.glob("*.json")):
     try:
         r = engine(path)

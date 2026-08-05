@@ -17,8 +17,9 @@
         "approval_rate": 0.95,
         "activation_rate": 0.6,
         "cannibalization": 0.12,
-        "operating_income_annual": 2937.0,
-        "monthly_churn": 0.03
+        "operating_income_annual": 2965.62,
+        "monthly_churn": 0.03,
+        "existing_clients": 4495500
       },
       {
         "id": "youth",
@@ -29,8 +30,9 @@
         "approval_rate": 0.85,
         "activation_rate": 0.65,
         "cannibalization": 0.25,
-        "operating_income_annual": 4550.26,
-        "monthly_churn": 0.04
+        "operating_income_annual": 4554.59,
+        "monthly_churn": 0.04,
+        "existing_clients": 9300000
       }
     ]
   },

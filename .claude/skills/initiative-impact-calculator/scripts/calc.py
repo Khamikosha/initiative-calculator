@@ -98,7 +98,8 @@ def resolve_segments(cfg):
                "activation_rate": g(s, "activation_rate", g(fun, "activation_rate", 1.0)),
                "cannibalization": g(s, "cannibalization", g(fun, "cannibalization")),
                "deadweight": g(s, "deadweight", g(fun, "deadweight")),
-               "acq_cost_per_client": g(s, "acq_cost_per_client", g(kt, "acq_cost_per_client"))}
+               "acq_cost_per_client": g(s, "acq_cost_per_client", g(kt, "acq_cost_per_client")),
+               "existing_clients": g(s, "existing_clients")}
         for k in ("avg_balance", "nim_annual", "monthly_turnover", "interchange_rate", "fee_income_m",
                   "cashback_rate", "servicing_cost_m", "cor_annual", "ramp_months", "monthly_churn",
                   "value_per_client", "operating_income_annual"):
@@ -158,6 +159,23 @@ def resolve_segments(cfg):
         ue[k] = _wavg([(w, r[k]) for w, r in base])
     kt["acq_cost_per_client"] = _wavg([(w, r["acq_cost_per_client"]) for w, r in cl_w])
 
+    # Проникновение: сколько рынка сегмента уже клиенты банка. При высоком проникновении
+    # «привлечение» на деле оказывается кросс-продажей: новых людей взять неоткуда.
+    for r in rows:
+        r["penetration"] = (r["existing_clients"] / r["target_size"]
+                            if r["existing_clients"] and r["target_size"] else None)
+    for r in live:
+        if r["penetration"] and r["penetration"] >= 0.5:
+            free = r["target_size"] - r["existing_clients"]
+            notes.append(
+                f"ПРОНИКНОВЕНИЕ: в сегменте «{r['name']}» уже {r['penetration']:.0%} рынка — "
+                f"клиенты банка. Незанятого рынка остаётся {free:,.0f} чел из "
+                f"{r['target_size']:,.0f}. Модель считает охват против ВСЕЙ ЦА, поэтому если "
+                "инициатива про привлечение НОВЫХ клиентов, инкремент завышен: возьмите "
+                "target_size равным незанятому рынку. Если инициатива про кросс-продажу "
+                "своей базе — всё верно, но растёт ОД, а не АКБ."
+                .replace(",", " "))
+
     total = sum(r["_clients"] for r in live)
     for r in rows:
         r["client_weight"] = round(r.get("_clients", 0) / total, 4) if total else 0
@@ -204,6 +222,7 @@ CHANNEL_KEYS = {"name": None, "kind": None, "frk_tier": (1, 4), "budget": _MONEY
                 "brand_uplift": (0.0, 5.0), "reach_abs": (0.0, 2e9), "impressions": (0.0, 1e13),
                 "effective_freq_target": (0.1, 50.0)}
 SEGMENT_KEYS = {"id": None, "target_size": (0.0, 2e9), "reachable_share": _RATE,
+                "existing_clients": (0.0, 2e9),
                 "baseline_organic_apps_m": (0.0, 1e9), "acq_cost_per_client": (0.0, 1e7),
                 **FUNNEL_KEYS, **UE_KEYS}
 CHANNEL_KINDS = ("internal", "perform", "brand")
