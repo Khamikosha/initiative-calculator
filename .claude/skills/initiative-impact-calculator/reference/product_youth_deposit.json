@@ -10,7 +10,7 @@
     "segments": [
       {
         "id": "teens",
-        "target_size": 6000000,
+        "target_size": 6000000.0,
         "reachable_share": 1.0,
         "baseline_organic_apps_m": 6000,
         "value_per_client": 513,
@@ -23,7 +23,7 @@
       },
       {
         "id": "youth",
-        "target_size": 10500000,
+        "target_size": 10500000.0,
         "reachable_share": 1.0,
         "baseline_organic_apps_m": 22000,
         "value_per_client": 860,

@@ -370,11 +370,19 @@ check("Расхождение горизонтов ценности и оцен�
           calc.analyze(calc.resolve_segments(_bad))["validation"]))
 check("Неизвестный режим отвергается",
       rejected(lambda c: c["unit_economics"].__setitem__("mode", "npv"), "mode"))
-check("Ценность клиента взвешивается по числу клиентов",
-      abs(calc.resolve_segments(json.loads(
-          (CASES / "product_kids_key_deposit.json").read_text(encoding="utf-8")
-      ))["unit_economics"]["value_per_client"] - 12658) < 2,
-      "Детский Ключевой: 14 670 ₽ у детей и 9 805 ₽ у подростков → 12 658 ₽ средневзвешенно")
+# Проверяем свойство, а не константу: числа сегментов меняются при каждом уточнении
+# данных, а инвариант «сумма по сегментам = среднее × число клиентов» должен держаться.
+_kk = calc.resolve_segments(json.loads(
+    (CASES / "product_kids_key_deposit.json").read_text(encoding="utf-8")))
+_rows = [r for r in _kk["_segments"]["rows"] if r.get("client_weight")]
+_want = sum(r["client_weight"] * r["value_per_client"] for r in _rows)
+_got = _kk["unit_economics"]["value_per_client"]
+check("Ценность клиента взвешивается по числу клиентов, а не усредняется",
+      abs(_got - _want) < 5 and
+      min(r["value_per_client"] for r in _rows) < _got < max(r["value_per_client"] for r in _rows),
+      "Детский Ключевой: " + " и ".join(
+          f'{r["value_per_client"]:,.0f} ₽ (вес {r["client_weight"]:.0%})' for r in _rows)
+      + f' → {_got:,.0f} ₽')
 
 # ------------------------------- 14. Возрастные вилки именных продуктов
 check("Детская карта — 6–13: подростки и молодёжь исключены",
@@ -394,9 +402,18 @@ check("Детский вклад доступен с рождения, детс�
       calc.PRODUCT_AGE["kids_deposit"][0] == 0 and calc.PRODUCT_AGE["kids_card"][0] == 6 and
       calc.segment_availability("kids", "kids_deposit")[0] == 1.0 and
       abs(calc.segment_availability("kids", "kids_card")[0] - 8 / 14) < 1e-9)
-check("У продукта с рождения рынок помечен как неполный: по 0–5 его не присылали",
-      prm.segment_defaults("kids", "kids_deposit")["market_partial"] == list(range(0, 6)) and
+check("Рынок известен по всем возрастам линейки — пометки о неполноте нет",
+      prm.segment_defaults("kids", "kids_deposit")["market_partial"] is None and
       prm.segment_defaults("kids", "kids_card")["market_partial"] is None)
+check("Вклад с рождения видит рынок шире карты: 17 млн против 11 млн",
+      prm.segment_defaults("kids", "kids_deposit")["target_size"] == 17_000_000 and
+      prm.segment_defaults("kids", "kids_card")["target_size"] == 11_000_000)
+# Самый незанятый кусок линейки: 6 млн человек, 50 тыс. клиентов. Проникновение
+# на порядок ниже любого другого возраста, а детские вклады им доступны с рождения.
+check("Возрасты 0–5 почти не охвачены — проникновение ниже 1%",
+      sum(prm.AGE_CLIENTS[a] for a in range(6)) / prm.MARKET_BY_AGES[(0, 5)] < 0.01,
+      f'{sum(prm.AGE_CLIENTS[a] for a in range(6)):,} клиентов из '
+      f'{prm.MARKET_BY_AGES[(0, 5)]:,} — свободно 5,95 млн')
 
 # ------------------------------- 15. Эффект в разных валютах (АКБ, ОД, AUM, PL)
 check("«Итого» исходной таблицы ОД везде равно сумме БЕЗ ипотеки",

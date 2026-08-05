@@ -10,7 +10,7 @@
     "segments": [
       {
         "id": "kids",
-        "target_size": 11000000,
+        "target_size": 11000000.0,
         "reachable_share": 1.0,
         "baseline_organic_apps_m": 2500,
         "value_per_client": 120,
@@ -18,7 +18,7 @@
         "activation_rate": 0.45,
         "cannibalization": 0.05,
         "monthly_churn": 0.02,
-        "existing_clients": 5050000,
+        "existing_clients": 5000000,
         "operating_income_annual": 2628.0
       }
     ]

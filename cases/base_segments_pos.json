@@ -12,7 +12,7 @@
     "segments": [
       {
         "id": "kids",
-        "target_size": 11000000,
+        "target_size": 11000000.0,
         "reachable_share": 1.0,
         "baseline_organic_apps_m": 2500,
         "monthly_turnover": 2745,
@@ -26,12 +26,12 @@
         "servicing_cost_m": 40,
         "ramp_months": 4,
         "monthly_churn": 0.02,
-        "existing_clients": 5050000,
+        "existing_clients": 5000000,
         "operating_income_annual": 2628.0
       },
       {
         "id": "teens",
-        "target_size": 6000000,
+        "target_size": 6000000.0,
         "reachable_share": 1.0,
         "baseline_organic_apps_m": 6000,
         "monthly_turnover": 5861,
@@ -50,7 +50,7 @@
       },
       {
         "id": "youth",
-        "target_size": 10500000,
+        "target_size": 10500000.0,
         "reachable_share": 1.0,
         "baseline_organic_apps_m": 22000,
         "monthly_turnover": 15561,

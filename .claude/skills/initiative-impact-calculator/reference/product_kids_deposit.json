@@ -10,7 +10,7 @@
     "segments": [
       {
         "id": "kids",
-        "target_size": 11000000,
+        "target_size": 17000000.0,
         "reachable_share": 1.0,
         "baseline_organic_apps_m": 2500,
         "value_per_client": 21903,
