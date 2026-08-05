@@ -72,6 +72,38 @@ for name, s in calc.SCEN.items():
     f_, p_ = calc.evaluate(calc.apply_scenario(cfg, s))
     compare(name, SCEN_COL[name], p_["npv"], f_["incremental_clients"])
 
+# ---------------------------------------------------------------- флаги и вердикт
+# Совпадения NPV мало: движок и книга могут сойтись в цифрах и разойтись в том, что
+# по этим цифрам говорят человеку. Раньше так и было — двух флагов не хватало в движке.
+# Тексты отличаются оформлением, поэтому сверяем по маркеру: сработал флаг или нет.
+MARKERS = [
+    "ВЕРДИКТ ПОНИЖЕН", "ИНВЕРСИЯ СЦЕНАРИЕВ", "контактов — сильный перебор",
+    "Охват упёрся в потолок ЦА", "держится на brand-uplift", "LTV/CAC",
+    "Окупаемости на заданном горизонте нет", "Выплаты идут за",
+    "Cost of Risk = 0", "Каннибализация = 0",
+]
+
+it_name = next((s for s in wb.sheetnames if s.lower() == "итог"), None)
+flag_rows = []
+if it_name:
+    it = wb[it_name]
+    flag_rows = [str(c.value) for c in it["A"] if isinstance(c.value, str) and c.value.startswith("⚑")]
+
+eng = calc.analyze(cfg)
+eng_flags, xl_flags = eng["flags"], flag_rows
+mismatch = []
+for mk in MARKERS:
+    in_eng = any(mk in f for f in eng_flags)
+    in_xl = any(mk in f for f in xl_flags)
+    if in_eng != in_xl:
+        mismatch.append((mk, in_eng, in_xl))
+
+# вердикт: сверяем не текст, а решение — понижен по качеству данных или нет
+xl_verdict = str(wb[it_name]["B4"].value or "") if it_name else ""
+v_eng = eng["verdict"]["downgraded_by_confidence"]
+v_xl = xl_verdict.startswith("СНАЧАЛА ПИЛОТ")
+verdict_ok = v_eng == v_xl
+
 print(f"\nСверка Excel ↔ движок  ({CASE.name})")
 print(f"{'вариант':>14} {'NPV движок':>16} {'NPV Excel':>16} {'Δ':>8}   "
       f"{'клиенты движок':>15} {'клиенты Excel':>14} {'Δ':>6}")
@@ -79,8 +111,16 @@ for title, e_npv, x_npv, d_npv, e_cl, x_cl, d_cl, good in rows:
     print(f"{title:>14} {e_npv:>16,} {x_npv:>16,.0f} {d_npv:>8.2f}   "
           f"{e_cl:>15,} {x_cl:>14,.0f} {d_cl:>6.2f}  {'OK' if good else 'РАСХОЖДЕНИЕ'}")
 
-bad = sum(1 for r in rows if not r[-1])
+print(f"\nФлаги: движок {len(eng_flags)}, книга {len(xl_flags)} — "
+      f"{'совпадают' if not mismatch else 'РАСХОЖДЕНИЕ'}")
+for mk, in_eng, in_xl in mismatch:
+    print(f"  ✗ «{mk}»: движок {'есть' if in_eng else 'нет'}, книга {'есть' if in_xl else 'нет'}")
+print(f"Вердикт понижен по качеству данных: движок {v_eng}, книга {v_xl} — "
+      f"{'совпадают' if verdict_ok else 'РАСХОЖДЕНИЕ'}")
+
+bad = sum(1 for r in rows if not r[-1]) + len(mismatch) + (0 if verdict_ok else 1)
 if bad:
-    print(f"\n✗ Расхождений: {bad}. Excel и движок считают по-разному — см. BACKLOG.md, пункт P0.")
+    print(f"\n✗ Расхождений: {bad}. Excel и движок считают или говорят по-разному — "
+          "инвариант проекта нарушен.")
     sys.exit(1)
-print("\n✓ Excel и движок сходятся.")
+print("\n✓ Excel и движок сходятся — и в цифрах, и в предупреждениях.")

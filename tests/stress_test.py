@@ -245,7 +245,79 @@ bad = seg_cfg(segments=[{"id": "adults", "target_size": 1000}])
 check("Неизвестный сегмент отлавливается",
       any("неизвестный сегмент" in n.lower() for n in bad["_segments"]["notes"]))
 
-# ---------------------------------------------------------------- 9. Все кейсы считаются
+# ------------------------------------------------- 9. Строгая проверка конфига (BACKLOG 0.5)
+def rejected(patch_fn, needle=None):
+    """Конфиг после патча обязан быть отвергнут; при needle — ещё и с внятным объяснением."""
+    cfg_ = copy.deepcopy(BASE); patch_fn(cfg_)
+    try:
+        calc.validate_config(cfg_)
+        return False
+    except calc.ConfigError as e:
+        return needle is None or needle in str(e)
+
+check("Опечатка в ключе не проходит молча",
+      rejected(lambda c: c["funnel"].__setitem__("cannibalisation", c["funnel"].pop("cannibalization"))))
+check("Опечатка сопровождается подсказкой правильного ключа",
+      rejected(lambda c: c["funnel"].__setitem__("cannibalisation", 0.15), "cannibalization"))
+check("Процент, введённый как 60 вместо 0.6, отвергается",
+      rejected(lambda c: c["funnel"].__setitem__("approval_rate", 60), "долей"))
+check("Неизвестный раздел отвергается",
+      rejected(lambda c: c.__setitem__("unit_econimics", {}), "Неизвестный раздел"))
+check("Неизвестный тип канала отвергается",
+      rejected(lambda c: c["channels"][0].__setitem__("kind", "ooh"), "kind"))
+check("Текст вместо числа отвергается",
+      rejected(lambda c: c["unit_economics"].__setitem__("avg_balance", "45000"), "ожидалось число"))
+check("Неизвестный сегмент отвергается на входе",
+      rejected(lambda c: c["audience"].__setitem__("segments", [{"id": "adults"}]), "adults"))
+check("Все рабочие кейсы проходят строгую проверку",
+      all(calc.validate_config(json.loads(p.read_text(encoding="utf-8"))) is not None
+          for p in sorted(CASES.glob("*.json"))))
+check("saturation_factor удалён из движка — конфиг с ним отвергается",
+      rejected(lambda c: c["channels"][0].__setitem__("saturation_factor", 0.5), "saturation_factor"))
+
+# ------------------------------------------------- 10. Частота при обрезанном охвате (0.4)
+_reach, _freq = calc.poisson_reach(360_000_000, 20_000_000)
+check("Частота считается по обрезанному охвату, как в Excel",
+      abs(_freq - (18.0 / 0.98)) < 1e-9,
+      f"охват {_reach:.4f}, частота {_freq:.3f} (было 18.000 — расходилось с книгой)")
+
+# ------------------------------------------------- 11. Флаги правил домена (0.2)
+cfg = copy.deepcopy(BASE)
+cfg["unit_economics"]["cor_annual"] = 0.0
+cfg["funnel"]["cannibalization"] = 0.0
+f_d, p_d = run(cfg)
+fl = calc.flags(cfg, f_d, p_d)
+check("Флаг «Cost of Risk = 0» есть в движке", any("Cost of Risk = 0" in x for x in fl))
+check("Флаг «Каннибализация = 0» есть в движке", any("Каннибализация = 0" in x for x in fl))
+cfg2 = copy.deepcopy(BASE); cfg2["unit_economics"]["cor_annual"] = 0.15
+f_c, p_c = run(cfg2)
+check("Флага CoR нет, когда риск задан",
+      not any("Cost of Risk = 0" in x for x in calc.flags(cfg2, f_c, p_c)))
+
+# ------------------------------------------------- 12. Индекс уверенности и вердикт (0.1)
+low = copy.deepcopy(BASE)
+low["confidence"] = {"A": 0, "B": 0, "C": 2, "D": 10}
+low["unit_economics"]["avg_balance"] = 90000            # выводим NPV в плюс
+res_low = calc.analyze(calc.resolve_segments(low))
+check("Индекс уверенности 0,25 при положительном NPV даёт «сначала пилот», а не GO",
+      res_low["verdict"]["downgraded_by_confidence"] and
+      not res_low["verdict"]["recommendation"].startswith("GO"),
+      f'по NPV было «{res_low["verdict"]["recommendation_by_npv"].split(" —")[0]}», '
+      f'итог «{res_low["verdict"]["recommendation"].split(" —")[0]}»')
+check("Исходный вердикт по NPV сохраняется отдельным полем",
+      res_low["verdict"]["recommendation_by_npv"].startswith("GO"))
+check("Понижение вердикта объясняется первым флагом",
+      res_low["flags"] and "ВЕРДИКТ ПОНИЖЕН" in res_low["flags"][0])
+
+high = copy.deepcopy(BASE)
+high["confidence"] = {"A": 10, "B": 2, "C": 0, "D": 0}
+high["unit_economics"]["avg_balance"] = 90000
+res_high = calc.analyze(calc.resolve_segments(high))
+check("При хорошем индексе вердикт не понижается",
+      not res_high["verdict"]["downgraded_by_confidence"] and
+      res_high["verdict"]["recommendation"].startswith("GO"))
+
+# ---------------------------------------------------------------- 13. Все кейсы считаются
 for path in sorted(CASES.glob("*.json")):
     try:
         r = engine(path)

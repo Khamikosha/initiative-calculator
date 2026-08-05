@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Движок расчёта эффекта инициатив (банк/финтех). Запуск: python3 calc.py config.json"""
-import json, sys, math, copy
+import json, sys, math, copy, difflib
 
 def g(d, k, default=0.0):
     v = d.get(k, default)
@@ -149,10 +149,128 @@ def resolve_segments(cfg):
     return cfg
 
 
+# ------------------------------------------------------------------ СХЕМА КОНФИГА
+# `g()` возвращает дефолт для любого отсутствующего ключа. Пока конфиг пишет один человек,
+# это удобно; когда его собирает веб-форма и сто человек — это главный класс ошибок:
+# «cannibalisation» вместо «cannibalization» молча превращается в каннибализацию 0%
+# и завышает результат, не сказав ни слова. Модель считает без ошибок и считает не то.
+#
+# Диапазоны — границы физического смысла, а не «нормы». Их задача — ловить проценты,
+# введённые как 15 вместо 0,15. None означает свободное значение (текст или список).
+_RATE = (0.0, 1.0)
+_MONEY = (0.0, 1e12)
+
+UE_KEYS = {"avg_balance": (0.0, 1e9), "nim_annual": (-1.0, 1.0), "monthly_turnover": (0.0, 1e9),
+           "interchange_rate": _RATE, "fee_income_m": (0.0, 1e7), "cashback_rate": _RATE,
+           "servicing_cost_m": (0.0, 1e6), "cor_annual": _RATE,
+           "ramp_months": (0.0, 120.0), "monthly_churn": _RATE}
+FUNNEL_KEYS = {"approval_rate": _RATE, "activation_rate": _RATE,
+               "cannibalization": _RATE, "deadweight": _RATE}
+
+SCHEMA = {
+    "meta": {"name": None, "type": None, "product": None,
+             "horizon_months": (1, 600), "discount_rate_annual": (0.0, 2.0)},
+    "audience": {"target_size": (0.0, 2e9), "baseline_organic_apps_m": (0.0, 1e9),
+                 "halo_months": (0.0, 60.0), "halo_decay": _RATE, "segments": None},
+    "funnel": dict(FUNNEL_KEYS),
+    "unit_economics": dict(UE_KEYS),
+    "costs": {"production": _MONEY, "it_dev": _MONEY, "one_off_other": _MONEY,
+              "opex_monthly": _MONEY, "campaign_months": (1, 600),
+              "acq_cost_per_client": (0.0, 1e7)},
+    "rice": {"reach": (0.0, 1e9), "impact": (0.0, 10.0), "confidence": _RATE, "effort": (0.0, 1e4)},
+    "confidence": {k: (0, 1000) for k in "ABCD"},
+}
+CHANNEL_KEYS = {"name": None, "kind": None, "frk_tier": (1, 4), "budget": _MONEY,
+                "cpm": (0.0, 1e6), "ctr": _RATE, "cr_to_app": _RATE, "response_rate": _RATE,
+                "brand_uplift": (0.0, 5.0), "reach_abs": (0.0, 2e9), "impressions": (0.0, 1e13),
+                "effective_freq_target": (0.1, 50.0)}
+SEGMENT_KEYS = {"id": None, "target_size": (0.0, 2e9), "reachable_share": _RATE,
+                "baseline_organic_apps_m": (0.0, 1e9), "acq_cost_per_client": (0.0, 1e7),
+                **FUNNEL_KEYS, **UE_KEYS}
+CHANNEL_KINDS = ("internal", "perform", "brand")
+
+
+class ConfigError(ValueError):
+    """Конфиг не прошёл проверку. Сообщение содержит ВСЕ найденные проблемы разом —
+    чинить по одной за прогон слишком долго, когда конфиг приходит из формы."""
+
+
+def _hint(key, allowed):
+    near = difflib.get_close_matches(key, list(allowed), n=1, cutoff=0.6)
+    if near:
+        return f" Возможно, имелось в виду «{near[0]}»."
+    return f" Допустимые: {', '.join(sorted(allowed))}."
+
+
+def _check_keys(d, allowed, where, errs):
+    for k, v in d.items():
+        if k not in allowed:
+            errs.append(f"{where}: неизвестный ключ «{k}».{_hint(k, allowed)}")
+            continue
+        rng = allowed[k]
+        if rng is None or v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            errs.append(f"{where}.{k}: ожидалось число, получено {type(v).__name__} ({v!r}).")
+        elif not rng[0] <= v <= rng[1]:
+            tail = " Проценты задаются долей: 15% это 0.15." if rng is _RATE and v > 1 else ""
+            errs.append(f"{where}.{k} = {v} вне диапазона {rng[0]}…{rng[1]}.{tail}")
+
+
+def validate_config(cfg):
+    """Строгая проверка: неизвестный ключ или значение вне диапазона — ошибка, а не дефолт."""
+    if not isinstance(cfg, dict):
+        raise ConfigError("Конфиг должен быть JSON-объектом.")
+    errs, known = [], set(SCHEMA) | {"channels"}
+    for sec in sorted(set(cfg) - known):
+        errs.append(f"Неизвестный раздел «{sec}».{_hint(sec, known)}")
+    for sec, allowed in SCHEMA.items():
+        val = cfg.get(sec)
+        if val is None:
+            continue
+        if not isinstance(val, dict):
+            errs.append(f"Раздел «{sec}» должен быть объектом, получен {type(val).__name__}.")
+        else:
+            _check_keys(val, allowed, sec, errs)
+
+    chans = cfg.get("channels") or []
+    if not isinstance(chans, list):
+        errs.append("«channels» должен быть списком.")
+    else:
+        for i, ch in enumerate(chans):
+            where = f"channels[{i}]"
+            if not isinstance(ch, dict):
+                errs.append(f"{where}: должен быть объектом.")
+                continue
+            _check_keys(ch, CHANNEL_KEYS, where, errs)
+            kind = ch.get("kind", "perform")
+            if kind not in CHANNEL_KINDS:
+                errs.append(f"{where}.kind = «{kind}» — допустимы только "
+                            f"{', '.join(CHANNEL_KINDS)}.")
+
+    segs = (cfg.get("audience") or {}).get("segments") or []
+    if segs and not isinstance(segs, list):
+        errs.append("«audience.segments» должен быть списком.")
+    elif isinstance(segs, list):
+        for i, s in enumerate(segs):
+            where = f"audience.segments[{i}]"
+            sid = s if isinstance(s, str) else (s.get("id") if isinstance(s, dict) else None)
+            if isinstance(s, dict):
+                _check_keys(s, SEGMENT_KEYS, where, errs)
+            elif not isinstance(s, str):
+                errs.append(f"{where}: должен быть объектом или строкой-идентификатором.")
+            if sid is not None and sid not in SEGMENTS:
+                errs.append(f"{where}.id = «{sid}» — допустимы только {', '.join(SEGMENTS)}.")
+
+    if errs:
+        raise ConfigError("Конфиг не прошёл проверку:\n  - " + "\n  - ".join(errs))
+    return cfg
+
+
 def load_config(src):
-    """Читает кейс и сводит сегменты. Единственная точка входа для конфига."""
+    """Читает кейс, проверяет по схеме и сводит сегменты. Единственная точка входа."""
     cfg = json.load(open(src, encoding="utf-8")) if src else json.load(sys.stdin)
-    return resolve_segments(cfg)
+    return resolve_segments(validate_config(cfg))
 
 
 def poisson_reach(impressions, audience):
@@ -160,9 +278,12 @@ def poisson_reach(impressions, audience):
     if audience <= 0 or impressions <= 0:
         return 0.0, 0.0
     lam = impressions / audience
-    reach = 1.0 - math.exp(-lam)
+    reach = min(1.0 - math.exp(-lam), 0.98)      # 100% ЦА не охватывается никогда
+    # Частота — среди РЕАЛЬНО охваченных, то есть по уже обрезанному охвату, как на листе
+    # «Каналы». Делить на необрезанный охват значит занижать частоту там, где охват упёрся
+    # в потолок, и разводить движок с книгой (18,00 против 18,37 на ЦА 20 млн).
     freq = lam / reach if reach > 0 else 0.0
-    return min(reach, 0.98), freq
+    return reach, freq
 
 def build_funnel(cfg):
     aud = g(cfg["audience"], "target_size")
@@ -174,10 +295,10 @@ def build_funnel(cfg):
 
     for c in cfg.get("channels", []):
         kind = c.get("kind", "perform"); budget = g(c, "budget")
-        sat = g(c, "saturation_factor", 1.0); media_cost += budget
+        media_cost += budget
         if kind == "internal":
             impr = g(c, "reach_abs")
-            apps = impr * g(c, "response_rate") * g(c, "cr_to_app") * sat
+            apps = impr * g(c, "response_rate") * g(c, "cr_to_app")
             r_share, freq = (min(impr / aud, 0.98) if aud else 0.0), 1.0
             direct_apps += apps
         else:
@@ -185,12 +306,12 @@ def build_funnel(cfg):
             impr = (budget / cpm * 1000.0) if cpm > 0 else g(c, "impressions")
             r_share, freq = poisson_reach(impr, aud)
             if kind == "perform":
-                apps = impr * g(c, "ctr") * g(c, "cr_to_app") * sat
+                apps = impr * g(c, "ctr") * g(c, "cr_to_app")
                 direct_apps += apps
             else:  # brand — эффект через прирост органики, а не прямая атрибуция
                 apps = 0.0
                 eff = min(1.0, freq / g(c, "effective_freq_target", 3.0))
-                brand_uplift_weighted += g(c, "brand_uplift") * r_share * eff * sat
+                brand_uplift_weighted += g(c, "brand_uplift") * r_share * eff
         total_impr += impr; reach_complement *= (1.0 - r_share)
         ch_out.append({"name": c.get("name", kind), "kind": kind, "budget": round(budget),
                        "impressions": round(impr), "reach_share": round(r_share, 4),
@@ -380,7 +501,9 @@ def validate(cfg, f, pl):
                        "линейно от показов, но на практике здесь уже работает выгорание: занизьте CTR на 15–30%.")
     return out
 
-def flags(f, pl):
+def flags(cfg, f, pl):
+    """Красные флаги. Список обязан совпадать с блоком «КРАСНЫЕ ФЛАГИ» листа «Итог» —
+    расхождение здесь означает, что движок и книга дают разные предупреждения на одних данных."""
     out = []
     if f["avg_frequency"] > 12:
         out.append(f"Средняя частота {f['avg_frequency']} контактов — сильный перебор (эффективная 3–6). Бюджет уходит в переконтакт.")
@@ -399,6 +522,12 @@ def flags(f, pl):
                    f"только {f['incremental_clients']:,}. За {over:,} клиентов ({over/max(pl['gross_clients_paid'],1):.0%}) "
                    f"вы платите, ничего не получая: они пришли бы и без стимула или переехали со своих же продуктов. "
                    f"Фактическая выплата на одного ИНКРЕМЕНТАЛЬНОГО клиента — {pl['payout_per_incremental_client']:,} ₽.")
+    # правила предметной области: оба флага есть на листе «Итог», в движке их не было
+    if g(cfg["unit_economics"], "cor_annual") <= 0 and monthly_margin(cfg["unit_economics"], 10 ** 6) > 0:
+        out.append("Cost of Risk = 0. Для кредитных продуктов это делает модель заведомо неверной: "
+                   "без стоимости риска кредитка всегда выглядит прекрасно.")
+    if g(cfg["funnel"], "cannibalization") <= 0:
+        out.append("Каннибализация = 0. В банке новый продукт почти всегда ест старый — обоснуйте ноль.")
     return out
 
 GRADE_W = {"A": 1.0, "B": 0.75, "C": 0.5, "D": 0.2}
@@ -417,16 +546,20 @@ def confidence_index(cfg):
             "note": "Можно принимать инвестиционное решение." if idx >= 0.6
                     else "Решение о полном запуске принимать рано — сначала пилот или добор данных."}
 
-def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else None
-    cfg = load_config(src)
+def analyze(cfg):
+    """Полный результат по уже проверенному и сведённому конфигу.
+
+    Отделено от main() ради сверки с Excel: тесту нужен тот же список флагов и тот же
+    вердикт, что уходит в JSON, а не их копия, которая со временем разойдётся.
+    """
     funnel, pl = evaluate(cfg)
     view = {k: v for k, v in funnel.items() if not k.startswith("_")}
     res = {"meta": cfg.get("meta", {}), "segments": cfg.get("_segments"), "funnel": view,
            "pl": {k: v for k, v in pl.items() if k != "monthly"}, "monthly": pl["monthly"],
            "scenarios": {}, "tornado": tornado(cfg, pl["npv"]),
            "rice": rice_score(cfg, funnel["_incremental_raw"], pl["npv"]),
-           "confidence": confidence_index(cfg), "frk_ladder": frk_ladder(cfg), "flags": flags(view, pl), "validation": validate(cfg, view, pl)}
+           "confidence": confidence_index(cfg), "frk_ladder": frk_ladder(cfg),
+           "flags": flags(cfg, view, pl), "validation": validate(cfg, view, pl)}
     for name, s in SCEN.items():
         ff, p = evaluate(apply_scenario(cfg, s))
         res["scenarios"][name] = {"incremental_clients": ff["incremental_clients"], "npv": p["npv"],
@@ -443,13 +576,37 @@ def main():
                                "Это значит, что маржа клиента меньше стоимости его привлечения, и каждый следующий "
                                "клиент увеличивает убыток. Ни один объём и ни один рост конверсии проблему не решат — "
                                "менять надо экономику: выплату, триггер или источник маржи.")
+    by_npv = ("NO-GO по экономике юнита — масштаб делает только хуже, "
+              "переработать выплату/триггер/источник маржи." if inverted and best <= 0
+              else "GO — положительный NPV во всех сценариях." if worst > 0
+              else "GO с контролем — база в плюсе, худший сценарий нет: зафиксировать stop-loss и чекпоинты." if n["base"]["npv"] > 0
+              else "NO-GO / переработать — базовый сценарий не окупается.")
     res["verdict"] = {"npv_positive_in_scenarios": sum(1 for v in n.values() if v["npv"] > 0),
                       "scenarios_inverted": inverted, "npv_worst": worst, "npv_best": best,
-                      "recommendation": ("NO-GO по экономике юнита — масштаб делает только хуже, "
-                                         "переработать выплату/триггер/источник маржи." if inverted and best <= 0
-                                         else "GO — положительный NPV во всех сценариях." if worst > 0
-                                         else "GO с контролем — база в плюсе, худший сценарий нет: зафиксировать stop-loss и чекпоинты." if n["base"]["npv"] > 0
-                                         else "NO-GO / переработать — базовый сценарий не окупается.")}
+                      "recommendation_by_npv": by_npv, "downgraded_by_confidence": False,
+                      "recommendation": by_npv}
+    # Индекс уверенности < 0,6 — вердикт не может быть «GO» ни при каком NPV.
+    # Модель, у которой половина допущений из воздуха, даёт разброс шире собственного ответа:
+    # красивый NPV здесь означает лишь удачную догадку, а не окупаемость.
+    conf = res["confidence"]
+    if conf and conf["index"] < 0.6 and by_npv.startswith("GO"):
+        tot = sum(conf["counts"].get(k, 0) for k in GRADE_W)
+        res["verdict"]["downgraded_by_confidence"] = True
+        res["verdict"]["recommendation"] = (
+            f"СНАЧАЛА ПИЛОТ — по деньгам вышло «{by_npv.split(' —')[0]}», но индекс уверенности "
+            f"{conf['index']} (порог 0,6): из {tot} допущений {conf['counts'].get('D', 0)} — догадки, "
+            f"{conf['counts'].get('C', 0)} — рыночные бенчмарки. Сначала добрать данные или пилот, "
+            "затем пересчитать.")
+        res["flags"].insert(0, f"ВЕРДИКТ ПОНИЖЕН: индекс уверенности {conf['index']} < 0,6. "
+                               f"По NPV было «{by_npv.split(' —')[0]}». Цифра держится на допущениях "
+                               "грейда C и D — подтвердите ключевые из них, иначе решение принимается "
+                               "не по модели, а по догадке.")
+    return res
+
+
+def main():
+    src = sys.argv[1] if len(sys.argv) > 1 else None
+    res = analyze(load_config(src))
     print(json.dumps(res, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":

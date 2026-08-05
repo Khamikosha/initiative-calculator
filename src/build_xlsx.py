@@ -139,6 +139,37 @@ inp("impact", "Impact", q("rice", "impact", 1), "0.25–3", "экспертно"
 inp("conf", "Confidence", q("rice", "confidence", 0.5), "%", "экспертно", "Уверенность в оценке. Синхронизируйте с индексом качества данных.", PCT)
 inp("effort", "Effort", q("rice", "effort", 1), "чел-мес", "команда", "Трудозатраты всех команд. Знаменатель RICE.")
 
+section("КАЧЕСТВО ДАННЫХ — грейд источника каждого допущения")
+inp("gA", "Допущений грейда A — свой факт из BI", q("confidence", "A"), "шт", "—",
+    "Вес 1,00. Прошлые кампании этого же продукта, выгрузка из DWH.")
+inp("gB", "Допущений грейда B — свой аналог", q("confidence", "B"), "шт", "—",
+    "Вес 0,75. Другой продукт, другая ЦА или другой период, но свои данные.")
+inp("gC", "Допущений грейда C — рыночный бенчмарк", q("confidence", "C"), "шт", "—",
+    "Вес 0,50. Публичная отчётность, отраслевое исследование.")
+inp("gD", "Допущений грейда D — догадка", q("confidence", "D"), "шт", "—", "Вес 0,20.")
+
+
+def frm(key, label, formula, unit, note, fmt=NUM2):
+    """Строка-формула на листе «Ввод»: считается, а не вводится."""
+    global r
+    ws.cell(r, 1, label).font = BOLD
+    c = ws.cell(r, 2, formula); c.font = BLACK; c.number_format = fmt
+    c.border = THIN; c.fill = FILL_RES
+    ws.cell(r, 3, unit).font = BLACK
+    ws.cell(r, 4, "формула").font = BLACK
+    ws.cell(r, 5, note).font = NOTE
+    R[key] = r
+    r += 1
+
+
+# веса обязаны совпадать с GRADE_W в src/calc.py
+_GT = f"SUM($B${R['gA']}:$B${R['gD']})"
+frm("conf_idx", "ИНДЕКС УВЕРЕННОСТИ",
+    f'=IF({_GT}=0,"",($B${R["gA"]}*1+$B${R["gB"]}*0.75+$B${R["gC"]}*0.5+$B${R["gD"]}*0.2)/{_GT})',
+    "0–1",
+    "Взвешенное среднее по грейдам. Ниже 0,6 вердикт на листе «Итог» понижается до «сначала пилот» "
+    "при любом NPV: модель, где половина допущений из воздуха, даёт разброс шире собственного ответа.")
+
 ws.freeze_panes = "A6"
 V = {k: f"Ввод!$B${v}" for k, v in R.items()}
 # движок берёт max(1, …) — повторяем, иначе ноль в этих ячейках даёт #ДЕЛ/0! вместо числа
@@ -590,15 +621,31 @@ NPV_SC = f'Модель!F{MR["npv"]}:H{MR["npv"]}'          # пессим / б�
 # поэтому вердикт строится на МИН/МАКС по сценариям, а не на колонке «Пессимистичный».
 INVERTED = f'AND(Модель!H{MR["npv"]}<Модель!G{MR["npv"]},Модель!G{MR["npv"]}<Модель!F{MR["npv"]})'
 
+IDX = V["conf_idx"]
+GTOT = f'SUM(Ввод!$B${R["gA"]}:$B${R["gD"]})'
+# Индекс уверенности < 0,6 — вердикт не может быть «GO» ни при каком NPV. То же правило
+# в src/calc.py: main() → downgraded_by_confidence.
+DOWNGRADE = f'AND(ISNUMBER({IDX}),{IDX}<0.6,LEFT($B$5,2)="GO")'
+
 it["A4"] = "ВЕРДИКТ"
 it["A4"].font = BOLD
-it["B4"] = (f'=IF(AND({INVERTED},MAX({NPV_SC})<=0),'
+it["B4"] = (f'=IF({DOWNGRADE},'
+            f'"СНАЧАЛА ПИЛОТ — по деньгам вышло GO, но индекс уверенности "&TEXT({IDX},"0.00")&'
+            f'" (порог 0,6): из "&{GTOT}&" допущений "&{V["gD"]}&" — догадки, "&{V["gC"]}&'
+            f'" — рыночные бенчмарки. Сначала добрать данные или пилот, затем пересчитать",'
+            f'$B$5)')
+it["B4"].font = Font(name=F, size=11, bold=True)
+it.merge_cells("B4:G4")
+
+it["A5"] = "Вердикт по NPV (до поправки на качество данных)"
+it["A5"].font = NOTE
+it["B5"] = (f'=IF(AND({INVERTED},MAX({NPV_SC})<=0),'
             f'"NO-GO по экономике юнита — масштаб делает только хуже, переработать выплату/триггер/источник маржи",'
             f'IF(MIN({NPV_SC})>0,"GO — положительный NPV во всех сценариях",'
             f'IF(Модель!G{MR["npv"]}>0,"GO с контролем — база в плюсе, худший сценарий нет: зафиксировать stop-loss и чекпоинты",'
             f'"NO-GO / переработать — базовый сценарий не окупается")))')
-it["B4"].font = Font(name=F, size=11, bold=True)
-it.merge_cells("B4:G4")
+it["B5"].font = NOTE
+it.merge_cells("B5:G5")
 
 it["A6"] = "СЦЕНАРИИ (полный план)"
 it["A6"].font = H2; it["A6"].fill = FILL_H
@@ -656,6 +703,9 @@ it["A32"] = "КРАСНЫЕ ФЛАГИ"
 it["A32"].font = H2; it["A32"].fill = FILL_H
 it.merge_cells("A32:G32")
 FLAGS = [
+    (f'IF({DOWNGRADE},"⚑ ВЕРДИКТ ПОНИЖЕН: индекс уверенности "&TEXT({IDX},"0.00")&'
+     f'" < 0,6. Цифра держится на допущениях грейда C и D — подтвердите ключевые из них, '
+     f'иначе решение принимается не по модели, а по догадке.","")'),
     (f'IF({INVERTED},"⚑ ИНВЕРСИЯ СЦЕНАРИЕВ: чем БОЛЬШЕ клиентов приводит инициатива, тем ХУЖЕ NPV. '
      f'Маржа клиента меньше стоимости его привлечения — каждый следующий клиент увеличивает убыток. '
      f'Ни объём, ни рост конверсии этого не чинят: менять надо выплату, триггер или источник маржи.","")'),
@@ -675,18 +725,18 @@ FLAGS = [
     (f'IF(AND({V["cor"]}=0,Модель!G{MR["marg"]}>0),"⚑ Cost of Risk = 0. Для кредитных продуктов это делает модель заведомо неверной.","")'),
     (f'IF({V["cannib"]}=0,"⚑ Каннибализация = 0. В банке новый продукт почти всегда ест старый — обоснуйте ноль.","")'),
 ]
+FLAG_ROW = 33
 for k, f_ in enumerate(FLAGS):
-    c = it.cell(33 + k, 1, "=" + f_); c.font = Font(name=F, size=10, color="C00000")
-    it.merge_cells(start_row=33 + k, start_column=1, end_row=33 + k, end_column=7)
+    c = it.cell(FLAG_ROW + k, 1, "=" + f_); c.font = Font(name=F, size=10, color="C00000")
+    it.merge_cells(start_row=FLAG_ROW + k, start_column=1, end_row=FLAG_ROW + k, end_column=7)
 
-it["A42"] = "RICE-скор"
-it["A42"].font = BOLD
-it["B42"] = f"=Модель!B{MR['rice']}"
-it["B42"].font = GREEN; it["B42"].number_format = NUM2
-it["A43"] = "NPV на чел-месяц"
-it["A43"].font = BOLD
-it["B43"] = f"=Модель!B{MR['npv_pm']}"
-it["B43"].font = GREEN; it["B43"].number_format = CUR
+rr = FLAG_ROW + len(FLAGS) + 1          # едет вместе со списком флагов, а не прибит к строке 42
+it.cell(rr, 1, "RICE-скор").font = BOLD
+it.cell(rr, 2, f"=Модель!B{MR['rice']}").font = GREEN
+it.cell(rr, 2).number_format = NUM2
+it.cell(rr + 1, 1, "NPV на чел-месяц").font = BOLD
+it.cell(rr + 1, 2, f"=Модель!B{MR['npv_pm']}").font = GREEN
+it.cell(rr + 1, 2).number_format = CUR
 
 ORDER = ["Итог", "Ввод", "Сегменты", "Каналы", "Модель", "Расчет_PL", "Методика"]
 wb._sheets = [wb[s] for s in ORDER if s in wb.sheetnames]
