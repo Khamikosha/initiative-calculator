@@ -43,21 +43,10 @@ params = _load("params")
 # той ли моделью посчитана цифра, которую показали комитету.
 ENGINE_VERSION = hashlib.sha256((ROOT / "src" / "calc.py").read_bytes()).hexdigest()[:12]
 
-INITIATIVE_TYPES = [
-    ("comms", "Коммуникация по своей базе"),
-    ("frk4", "ФРК 4 — внутренние каналы и перформанс"),
-    ("frk3", "ФРК 3 — + внешние посевы"),
-    ("frk2", "ФРК 2 — + наружная реклама"),
-    ("frk1", "ФРК 1 — + телевидение"),
-    ("product_launch", "Вывод продукта на полку"),
-    ("pilot", "Пилот или акция"),
-]
-PRODUCTS = [
-    ("account", "Счёт"), ("deposit", "Вклад"), ("piggy_bank", "Копилка"), ("card", "Карта"),
-    ("savings", "Накопительный счёт"), ("broker", "Брокерский счёт"), ("prime", "Подписка"),
-    ("loyalty", "Программа лояльности"), ("credit", "Кредит"), ("ecosystem", "Экосистема"),
-]
-PRODUCT_NAME = dict(PRODUCTS)
+# Типы инициатив и продукты живут в реестре: от них зависит и форма, и подсказки навыка
+INITIATIVE_TYPES = params.TYPE_CHOICES
+PRODUCTS = params.PRODUCTS
+PRODUCT_NAME = params.PRODUCT_NAME
 STEPS = [("segments", "Сегменты"), ("panel", "Панель"), ("assumptions", "Допущения"),
          ("result", "Результат")]
 
@@ -85,7 +74,8 @@ tpl.env.filters["pct"] = lambda v, d=1: "—" if v is None else _fmt_num(float(v
 tpl.env.filters["from_json"] = lambda s: json.loads(s or "{}")
 tpl.env.globals.update(params=params, calc=calc, SEGMENTS=calc.SEGMENTS,
                        TYPES=INITIATIVE_TYPES, PRODUCTS=PRODUCTS, PRODUCT_NAME=PRODUCT_NAME,
-                       STEPS=STEPS, ENGINE_VERSION=ENGINE_VERSION)
+                       STEPS=STEPS, ENGINE_VERSION=ENGINE_VERSION,
+                       TYPE_META=params.INITIATIVE_TYPES)
 
 
 def author_of(request):

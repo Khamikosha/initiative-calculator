@@ -37,15 +37,93 @@ class Param:
     grade: str = "C"            # предполагаемый грейд источника, пока не заменён своим фактом
     segment_scoped: bool = False    # можно переопределить для отдельного возрастного сегмента
     key_assumption: bool = False    # сильнее прочих двигает результат — подтверждать первым
+    types: tuple = ()           # типы инициатив, где параметр работает; пусто — во всех
+    kinds: tuple = ()           # для каналов: типы каналов, где параметр работает
     note: str = ""
 
     @property
     def rng(self) -> Optional[Tuple[float, float]]:
-        return calc.SCHEMA.get(self.section, {}).get(self.key)
+        # каналы — список, а не раздел конфига, поэтому их диапазоны лежат отдельно;
+        # без этой ветки rng молча возвращал None для каждого параметра канала
+        src = calc.CHANNEL_KEYS if self.section == "channels" else calc.SCHEMA.get(self.section, {})
+        return src.get(self.key)
+
+    def works_for(self, type_id) -> bool:
+        """Влияет ли параметр на результат при этом типе инициативы."""
+        return not self.types or type_id in self.types
 
 
 def P(key, section, label, **kw):
     return Param(key=key, section=section, label=label, **kw)
+
+
+# ------------------------------------------------------------------ ТИПЫ ИНИЦИАТИВ
+# ВАЖНО: движок НЕ читает `meta.type` — он ветвится только по типам каналов. Поэтому тип
+# инициативы это методическая рамка (какие вопросы важны и что заполнять), а не переключатель
+# формул. Отсюда и правило: параметр, помеченный как «не для этого типа», всё равно попадает
+# в расчёт, если в нём стоит ненулевое значение. Прятать его нельзя — спрятанные деньги
+# продолжают считаться.
+INITIATIVE_TYPES = {
+    "comms": {
+        "label": "Коммуникация по своей базе",
+        "kinds": ("internal",),
+        "metric": "инкрементальный отклик против контрольной группы",
+        "note": "Отклик задавать как uplift над контрольной группой, а не как абсолютный. "
+                "Без контрольной группы результат недоказуем — так и писать.",
+    },
+    "frk4": {
+        "label": "ФРК 4 — внутренние каналы и перформанс",
+        "kinds": ("internal", "perform"),
+        "metric": "инкрементальный CPA",
+        "note": "Охватных каналов нет, поэтому органика и halo в расчёт не входят.",
+    },
+    "frk3": {
+        "label": "ФРК 3 — + внешние посевы",
+        "kinds": ("internal", "perform"),
+        "metric": "окупается ли шаг с ФРК 4",
+        "note": "Смотреть на предельную отдачу шага, а не на средний ROMI уровня.",
+    },
+    "frk2": {
+        "label": "ФРК 2 — + наружная реклама",
+        "kinds": ("internal", "perform", "brand"),
+        "metric": "предельный NPV шага и чем доказывается охватная часть",
+        "note": "Появляется brand-эффект: включаются органика и halo. Это самое недоказуемое "
+                "звено модели — нужен geo-holdout или MMM.",
+    },
+    "frk1": {
+        "label": "ФРК 1 — + телевидение",
+        "kinds": ("internal", "perform", "brand"),
+        "metric": "предельный NPV шага",
+        "note": "То же, что ФРК 2, но ставка кратно выше. «А нужен ли ТВ» — самый дорогой "
+                "вопрос в брифе.",
+    },
+    "product_launch": {
+        "label": "Вывод продукта на полку",
+        "kinds": ("internal", "perform", "brand"),
+        "metric": "NPV и срок окупаемости, а НЕ ROMI",
+        "note": "ROMI считается только к маркетинговым затратам и не видит IT-разработку "
+                "и opex: будет выглядеть отлично при глубоко отрицательном NPV.",
+    },
+    "pilot": {
+        "label": "Пилот или акция",
+        "kinds": ("internal", "perform"),
+        "metric": "достаточен ли дизайн, чтобы вообще что-то доказать",
+        "note": "Для акций обязателен deadweight: «скидка дала +40%» бессмысленно, если "
+                "половина взяла бы и так.",
+    },
+}
+TYPE_CHOICES = [(k, v["label"]) for k, v in INITIATIVE_TYPES.items()]
+
+# Продукт определяет возрастные правила банка — пороги живут в calc.PRODUCT_AGE_GATE
+PRODUCTS = [
+    ("account", "Счёт"), ("deposit", "Вклад"), ("piggy_bank", "Копилка"), ("card", "Карта"),
+    ("savings", "Накопительный счёт"), ("broker", "Брокерский счёт"), ("prime", "Подписка"),
+    ("loyalty", "Программа лояльности"), ("credit", "Кредит"), ("ecosystem", "Экосистема"),
+]
+PRODUCT_NAME = dict(PRODUCTS)
+
+BRAND_TYPES = tuple(k for k, v in INITIATIVE_TYPES.items() if "brand" in v["kinds"])
+FRK_TYPES = ("frk4", "frk3", "frk2", "frk1")
 
 
 # ------------------------------------------------------------------ МЕТА
@@ -72,11 +150,15 @@ AUDIENCE = [
            "При выборе сегментов задаётся по каждому отдельно."),
     P("baseline_organic_apps_m", "audience", "Органические заявки в месяц", unit="шт/мес",
       fmt="int", default=5_000, grade="A", key_assumption=True, segment_scoped=True,
+      types=BRAND_TYPES,
       note="Текущий поток БЕЗ кампании. База, к которой применяется brand-uplift. "
            "Если здесь ноль, охватные каналы дадут ровно ноль заявок."),
     P("halo_months", "audience", "Halo-период после кампании", unit="мес", fmt="num", default=2,
-      note="Сколько месяцев brand-эффект тянется после открутки."),
+      types=BRAND_TYPES,
+      note="Сколько месяцев brand-эффект тянется после открутки. Без охватных каналов "
+           "не влияет ни на что."),
     P("halo_decay", "audience", "Затухание halo", unit="доля", fmt="pct", default=0.5,
+      types=BRAND_TYPES,
       note="Какая доля эффекта сохраняется в halo-период."),
 ]
 
@@ -93,7 +175,7 @@ FUNNEL = [
       note="Доля клиентов, переехавших со своих же продуктов. Ноль ставить только с обоснованием: "
            "в банке новый продукт почти всегда ест старый."),
     P("deadweight", "funnel", "Deadweight (взяли бы и так)", unit="%", fmt="pct", default=0.0,
-      grade="D", segment_scoped=True,
+      grade="D", segment_scoped=True, types=("pilot",), key_assumption=True,
       note="Доля тех, кто оформил бы и без промо. Для акций 30–60%, для обычных кампаний 0. "
            "«Скидка дала +40%» бессмысленно, если половина взяла бы и так."),
 ]
@@ -138,13 +220,16 @@ COSTS = [
     P("production", "costs", "Производство и креатив", unit="₽", fmt="money", default=0,
       grade="A", note="Разовые, списываются в 1-й месяц. Входят в маркетинговые затраты для ROMI."),
     P("it_dev", "costs", "IT-разработка", unit="₽", fmt="money", default=0, grade="A",
+      types=("product_launch",),
       note="Для вывода продукта на полку. В ROMI НЕ входит, в NPV — да."),
     P("one_off_other", "costs", "Прочие разовые затраты", unit="₽", fmt="money", default=0,
-      grade="A", note="Юристы, комплаенс, лицензии, интеграции."),
+      grade="A", types=("product_launch", "pilot"),
+      note="Юристы, комплаенс, лицензии, интеграции."),
     P("opex_monthly", "costs", "Постоянные расходы", unit="₽/мес", fmt="money", default=0,
-      grade="A", note="Run-rate: поддержка продукта, команда. Списывается каждый месяц горизонта."),
+      grade="A", types=("product_launch",),
+      note="Run-rate: поддержка продукта, команда. Списывается каждый месяц горизонта."),
     P("acq_cost_per_client", "costs", "Выплата за привлечение", unit="₽/клиента", fmt="money",
-      default=0, grade="A", segment_scoped=True,
+      default=0, grade="A", segment_scoped=True, types=("comms", "pilot", "product_launch"),
       note="Реферальные выплаты, промокоды, бонус за открытие. Платится за КАЖДОГО сработавшего, "
            "не за инкремент: за deadweight и каннибализацию вы платите, ничего не получая."),
 ]
@@ -182,22 +267,22 @@ CHANNELS = [
            "brand — охватные (ТВ, наружка), работают только через прирост органики."),
     P("frk_tier", "channels", "ФРК", fmt="int", default=4,
       note="Внутренние и перформанс = 4, внешние посевы = 3, наружная = 2, ТВ = 1. "
-           "Уровни вложены: 4 ⊂ 3 ⊂ 2 ⊂ 1."),
+           "Уровни вложены: 4 ⊂ 3 ⊂ 2 ⊂ 1.", kinds=("internal", "perform", "brand")),
     P("budget", "channels", "Бюджет", unit="₽", fmt="money", default=0),
     P("cpm", "channels", "CPM", unit="₽", fmt="money", default=0,
-      note="Показы = бюджет / CPM × 1000."),
-    P("ctr", "channels", "CTR", unit="%", fmt="pct2", default=0, note="Для perform-каналов."),
+      note="Показы = бюджет / CPM × 1000.", kinds=("perform", "brand")),
+    P("ctr", "channels", "CTR", unit="%", fmt="pct2", default=0, note="Для perform-каналов.", kinds=("perform",)),
     P("response_rate", "channels", "Response rate", unit="%", fmt="pct2", default=0,
-      note="Для internal-каналов. Для коммуникаций задавать как uplift над контрольной группой."),
-    P("cr_to_app", "channels", "CR в заявку", unit="%", fmt="pct", default=0),
+      note="Для internal-каналов. Для коммуникаций задавать как uplift над контрольной группой.", kinds=("internal",)),
+    P("cr_to_app", "channels", "CR в заявку", unit="%", fmt="pct", default=0, kinds=("internal", "perform")),
     P("brand_uplift", "channels", "Brand uplift", unit="%", fmt="pct", default=0,
-      note="Для охватных каналов: на сколько процентов растёт органика."),
+      note="Для охватных каналов: на сколько процентов растёт органика.", kinds=("brand",)),
     P("reach_abs", "channels", "Охват базы", unit="чел", fmt="int", default=0,
-      note="Для internal-каналов вместо показов."),
+      note="Для internal-каналов вместо показов.", kinds=("internal",)),
     P("impressions", "channels", "Показы", unit="шт", fmt="int", default=0,
-      note="Если CPM не задан — показы напрямую."),
+      note="Если CPM не задан — показы напрямую.", kinds=("perform", "brand")),
     P("effective_freq_target", "channels", "Эффективная частота", unit="контактов", fmt="num",
-      default=3, note="Полный brand-эффект достигается при этой частоте контакта."),
+      default=3, note="Полный brand-эффект достигается при этой частоте контакта.", kinds=("brand",)),
 ]
 
 SECTIONS = [
@@ -214,6 +299,28 @@ ALL = [p for _, _, ps in SECTIONS for p in ps]
 BY_KEY = {(p.section, p.key): p for p in ALL}
 CHANNEL_BY_KEY = {p.key: p for p in CHANNELS}
 SEGMENT_SCOPED = [p for p in ALL if p.segment_scoped]
+
+
+def split_by_type(ps, type_id, cfg=None):
+    """Делит параметры раздела на «работают при этом типе» и «остальные».
+
+    Параметр из второй группы с НЕнулевым значением возвращается в первой: он всё равно
+    попадает в расчёт, и прятать его нельзя. Спрятанные деньги продолжают считаться —
+    это ровно тот класс ошибок, ради которого писалась строгая валидация.
+    """
+    main, rest = [], []
+    for p in ps:
+        used = p.works_for(type_id)
+        if not used and cfg:
+            val = (cfg.get(p.section) or {}).get(p.key)
+            used = bool(val) and val != p.default
+        (main if used else rest).append(p)
+    return main, rest
+
+
+def channel_fields(kind):
+    """Поля канала, которые движок читает при этом типе канала."""
+    return [p for p in CHANNELS if not p.kinds or kind in p.kinds]
 
 
 def defaults():

@@ -165,3 +165,12 @@ footer {
   border-top: 1px solid var(--line); padding: 16px 24px; color: var(--muted); font-size: 13px;
   text-align: center;
 }
+
+.type-note { background: #eef3fb; border-color: var(--accent); }
+.rest { margin-top: 12px; }
+.rest > summary {
+  cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0;
+  border-top: 1px dashed var(--line);
+}
+.rest[open] > summary { margin-bottom: 8px; }
+.rest table.params { opacity: .75; }

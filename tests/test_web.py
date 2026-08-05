@@ -42,6 +42,37 @@ check("Дефолты реестра проходят строгую валид�
 check("Каждый параметр реестра имеет подпись и пояснение",
       all(p.label and (p.note or p.section in ("meta", "rice")) for p in params.ALL))
 
+# ---------------------------------------------------------------- 1б. Разбивка по типам
+check("Все типы инициатив описаны в реестре",
+      set(params.INITIATIVE_TYPES) == {"comms", "frk4", "frk3", "frk2", "frk1",
+                                       "product_launch", "pilot"})
+check("Органика и halo работают только там, где есть охватные каналы",
+      all(not p.works_for("comms") and not p.works_for("frk4") and p.works_for("frk1")
+          for p in params.ALL
+          if p.key in ("baseline_organic_apps_m", "halo_months", "halo_decay")))
+check("IT-разработка и opex — только для вывода продукта",
+      all(p.works_for("product_launch") and not p.works_for("comms")
+          for p in params.ALL if p.key in ("it_dev", "opex_monthly")))
+check("Deadweight — для пилотов и акций",
+      next(p for p in params.ALL if p.key == "deadweight").types == ("pilot",))
+check("Юнит-экономика нужна всем типам: NPV считается всегда",
+      all(not p.types for p in params.ALL if p.section == "unit_economics"))
+check("Поля канала привязаны к типу канала, а не к типу инициативы",
+      {p.key for p in params.channel_fields("internal")} ==
+      {"name", "kind", "frk_tier", "budget", "cr_to_app", "response_rate", "reach_abs"},
+      f'internal: {sorted(p.key for p in params.channel_fields("internal"))}')
+check("Brand-поля есть только у охватных каналов",
+      all("brand_uplift" not in {p.key for p in params.channel_fields(k)}
+          for k in ("internal", "perform")))
+
+_main, _rest = params.split_by_type(params.COSTS, "comms")
+check("При коммуникации IT-разработка уходит в «прочие»",
+      "it_dev" in {p.key for p in _rest} and "it_dev" not in {p.key for p in _main})
+_main2, _rest2 = params.split_by_type(params.COSTS, "comms", {"costs": {"it_dev": 50_000_000}})
+check("Ненулевое «нерелевантное» значение остаётся на виду — деньги всё равно считаются",
+      "it_dev" in {p.key for p in _main2},
+      "50 млн на IT при типе comms не прячутся под раскрытие")
+
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)
 

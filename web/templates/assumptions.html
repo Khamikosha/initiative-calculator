@@ -24,46 +24,68 @@
 
 {% set seg_ids = chosen.keys() | list %}
 
+{% macro ptable(rows, sec, cfg, seg_ids, chosen) %}
+  <table class="params">
+    <thead>
+      <tr>
+        <th>Параметр</th>
+        <th class="r">{{ "Общее" if seg_ids else "Значение" }}</th>
+        {% for sid in seg_ids %}<th class="r">{{ SEGMENTS[sid].name }}</th>{% endfor %}
+        <th>Ед.</th><th>Что это</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in rows %}
+      <tr>
+        <td>{{ p.label }}<span class="grade g{{ p.grade }}">{{ p.grade }}</span></td>
+        <td class="r">{{ cell(p, sec, cfg) }}</td>
+        {% for sid in seg_ids %}
+          <td class="r">
+            {% if p.segment_scoped %}
+              <input name="seg.{{ sid }}.{{ p.key }}" inputmode="decimal" class="seg-in"
+                     value="{{ chosen[sid][p.key] if p.key in chosen[sid] else '' }}"
+                     placeholder="общее">
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        {% endfor %}
+        <td class="unit">{{ p.unit }}</td>
+        <td class="note">{{ p.note }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endmacro %}
+
+{% set tmeta = TYPE_META[init.type] %}
+<div class="callout type-note">
+  <b>{{ tmeta.label }}.</b> Главный вопрос: {{ tmeta.metric }}. {{ tmeta.note }}
+  <br><small>Каналы этого типа: {{ tmeta.kinds | join(', ') }}. Ниже показаны параметры,
+  которые при таком составе каналов реально влияют на результат; остальные убраны под
+  «Прочие» — но если в них стоит ненулевое значение, они остаются на виду и продолжают
+  считаться.</small>
+</div>
+
 {% for sec, title, ps in params.SECTIONS %}
   {% if sec not in ('meta', 'confidence') %}
+  {% set visible = ps | rejectattr('key', 'in', ('target_size', 'baseline_organic_apps_m') if (sec == 'audience' and seg_ids) else ()) | list %}
+  {% set split = params.split_by_type(visible, init.type, cfg) %}
+  {% if split[0] or split[1] %}
   <section class="card">
     <h3>{{ title }}</h3>
-    <table class="params">
-      <thead>
-        <tr>
-          <th>Параметр</th>
-          <th class="r">{{ "Общее" if seg_ids else "Значение" }}</th>
-          {% for sid in seg_ids %}<th class="r">{{ SEGMENTS[sid].name }}</th>{% endfor %}
-          <th>Ед.</th><th>Что это</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for p in ps %}
-        {% if not (sec == 'audience' and p.key in ('target_size', 'baseline_organic_apps_m') and seg_ids) %}
-        <tr>
-          <td>{{ p.label }}<span class="grade g{{ p.grade }}">{{ p.grade }}</span></td>
-          <td class="r">{{ cell(p, sec, cfg) }}</td>
-          {% for sid in seg_ids %}
-            <td class="r">
-              {% if p.segment_scoped %}
-                <input name="seg.{{ sid }}.{{ p.key }}" inputmode="decimal" class="seg-in"
-                       value="{{ chosen[sid][p.key] if p.key in chosen[sid] else '' }}"
-                       placeholder="общее">
-              {% else %}<span class="muted">—</span>{% endif %}
-            </td>
-          {% endfor %}
-          <td class="unit">{{ p.unit }}</td>
-          <td class="note">{{ p.note }}</td>
-        </tr>
-        {% endif %}
-      {% endfor %}
-      </tbody>
-    </table>
+    {% if split[0] %}{{ ptable(split[0], sec, cfg, seg_ids, chosen) }}{% endif %}
+    {% if split[1] %}
+      <details class="rest">
+        <summary>Прочие — при типе «{{ tmeta.label }}» на результат не влияют
+          ({{ split[1] | length }})</summary>
+        {{ ptable(split[1], sec, cfg, seg_ids, chosen) }}
+      </details>
+    {% endif %}
     {% if seg_ids %}
       <small class="muted">Пустая ячейка сегмента — берётся общее значение.
       Размер сегмента и органика задаются на шаге «Сегменты».</small>
     {% endif %}
   </section>
+  {% endif %}
   {% endif %}
 {% endfor %}
 
