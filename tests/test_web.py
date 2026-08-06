@@ -169,6 +169,24 @@ check("Путь проходится без открытия полной фор
 check("Экономика подставилась из каталога, а не осталась дефолтом карты",
       _res["pl"]["mode"] == "value_per_client" and _res["pl"]["value_per_client"] == 21903)
 
+# ------------------------------------------- 1д. Навык не отстал от проекта
+# Копия движка в навыке должна совпадать побайтово, а реестр обязан быть рядом с ней:
+# без params.py навык посчитает, но каталог продуктов, ОД и демографию будет спрашивать
+# у человека заново — то есть ровно то, от чего мы уходили.
+_SK = ROOT / ".claude" / "skills" / "initiative-impact-calculator"
+check("Движок в навыке совпадает с src/calc.py побайтово",
+      (_SK / "scripts" / "calc.py").read_bytes() == (ROOT / "src" / "calc.py").read_bytes())
+check("Реестр лежит рядом с движком в навыке",
+      (_SK / "scripts" / "params.py").read_bytes() == (ROOT / "src" / "params.py").read_bytes())
+check("Кейсы в навыке те же, что в проекте",
+      {f.name for f in (_SK / "reference").glob("*.json")} ==
+      {f.name for f in (ROOT / "cases").glob("*.json")})
+_skill_md = (_SK / "SKILL.md").read_text(encoding="utf-8")
+check("Навык описывает то, что реально умеет движок",
+      all(k in _skill_md for k in
+          ("value_per_client", "params.py", "проникновени", "НЕЧЕГО СЧИТАТЬ", "АКБ")),
+      "режимы экономики, реестр, проникновение, пустой прогон, валюты эффекта")
+
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)
 

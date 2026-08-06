@@ -41,7 +41,7 @@ xlsx:
 	@$(PY) src/build_xlsx.py $(CASE) && echo "Excel собран: $(XLSX)"
 
 sync:
-	@cp src/calc.py .claude/skills/initiative-impact-calculator/scripts/calc.py
+	@cp src/calc.py src/params.py .claude/skills/initiative-impact-calculator/scripts/
 	@cp cases/*.json .claude/skills/initiative-impact-calculator/reference/
 	@echo "навык синхронизирован с src/"
 
