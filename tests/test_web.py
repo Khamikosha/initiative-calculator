@@ -117,6 +117,58 @@ check("Введённое руками не затирается подстан�
       _seg["target_size"] == 999 and _seg["value_per_client"] == 14670,
       "рынок остался пользовательским, ценность подставилась")
 
+# ------------------------------------------- 1г. Обязательные поля канала
+# Живой тест: у internal-канала не заполнили response_rate, воронка схлопнулась в ноль,
+# и человек получил «NO-GO» вместо ошибки. Формула не ломается — она честно умножает
+# на ноль, поэтому недостачу должна ловить форма.
+check("Для internal обязательны охват базы, отклик и конверсия",
+      set(params.CHANNEL_REQUIRED["internal"]) == {"reach_abs", "response_rate", "cr_to_app"})
+check("Для perform обязательны бюджет, CPM, CTR и конверсия",
+      set(params.CHANNEL_REQUIRED["perform"]) == {"budget", "cpm", "ctr", "cr_to_app"})
+check("Для brand конверсия не нужна — охватные каналы прямых заявок не дают",
+      "cr_to_app" not in params.CHANNEL_REQUIRED["brand"] and
+      "brand_uplift" in params.CHANNEL_REQUIRED["brand"])
+
+_bad_ch = {"name": "Пуши", "kind": "internal", "reach_abs": 2_000_000, "cr_to_app": 0.1}
+check("Незаполненный отклик у internal виден как недостача",
+      params.channel_missing(_bad_ch) == ["response_rate"],
+      "ровно тот случай, что дал нули на живом тесте")
+_bad_ch["response_rate"] = 0.018
+check("Заполненный канал больше не числится неполным",
+      params.channel_missing(_bad_ch) == [])
+check("Показы засчитываются вместо связки бюджет и CPM",
+      params.channel_missing({"name": "П", "kind": "perform", "impressions": 1e6,
+                              "ctr": 0.01, "cr_to_app": 0.05}) == [])
+check("Пустой медиаплан — не готов к расчёту",
+      not params.channels_ready({"channels": []}) and
+      not params.channels_ready({"channels": [{"name": "П", "kind": "perform"}]}) and
+      params.channels_ready({"channels": [_bad_ch]}))
+
+# Сквозной сценарий пункта 0.3: пройти путь, не открывая полную форму параметров,
+# и получить осмысленный расчёт. Задаём только медиаплан и сроки — всё остальное
+# должно подставиться само.
+r = client.post("/initiative/new", data={
+    "name": "Минимальный ввод", "type": "product_launch", "product": "kids_deposit",
+    "description": "только медиаплан"}, follow_redirects=False)
+_min = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_min}/segments",
+            data={"segments": ["kids"], "seg.kids.baseline_organic_apps_m": "700"},
+            follow_redirects=False)
+client.post(f"/initiative/{_min}/assumptions", data={
+    "costs.campaign_months": "3", "costs.production": "8000000",
+    "ch.0.name": "Родительские пуши", "ch.0.kind": "internal", "ch.0.frk_tier": "4",
+    "ch.0.reach_abs": "2000000", "ch.0.response_rate": "0.018", "ch.0.cr_to_app": "0.1",
+}, follow_redirects=False)
+r = client.post(f"/initiative/{_min}/calculate", follow_redirects=False)
+_cid = int(r.headers["location"].split("/")[-1])
+_res = json.loads(_db.get_calculation(_db.connect(), _cid)["result_json"])
+check("Путь проходится без открытия полной формы параметров",
+      _res["funnel"]["incremental_clients"] > 0 and
+      not _res["verdict"].get("nothing_to_calculate"),
+      f'инкремент {_res["funnel"]["incremental_clients"]:,}, NPV {_res["pl"]["npv"]:,} ₽')
+check("Экономика подставилась из каталога, а не осталась дефолтом карты",
+      _res["pl"]["mode"] == "value_per_client" and _res["pl"]["value_per_client"] == 21903)
+
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)
 

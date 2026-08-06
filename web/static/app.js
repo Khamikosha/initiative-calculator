@@ -105,3 +105,59 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// ------------------------------------------------------------------ каналы
+// Какие поля канал реально читает и без каких он даёт ноль — из реестра, не из головы.
+// Это не копия модели, а её описание: сами формулы по-прежнему только в движке.
+const CH_USED = {"internal": ["name", "kind", "frk_tier", "budget", "response_rate", "cr_to_app", "reach_abs"], "perform": ["name", "kind", "frk_tier", "budget", "cpm", "ctr", "cr_to_app", "impressions"], "brand": ["name", "kind", "frk_tier", "budget", "cpm", "brand_uplift", "impressions", "effective_freq_target"]};
+const CH_REQ = {"internal": ["reach_abs", "response_rate", "cr_to_app"], "perform": ["budget", "cpm", "ctr", "cr_to_app"], "brand": ["budget", "cpm", "brand_uplift"]};
+
+const chbody = document.getElementById('chbody');
+if (chbody) {
+  const calcBtn = document.querySelector('.actions.sticky .btn');
+  const warn = document.getElementById('chwarn');
+
+  const refreshChannels = () => {
+    let ready = 0, problems = [];
+    Array.from(chbody.rows).forEach(row => {
+      const kind = row.querySelector('select')?.value || 'perform';
+      const nameEl = row.querySelector('input[name$=".name"]');
+      const name = (nameEl?.value || '').trim();
+      const used = CH_USED[kind] || [], req = CH_REQ[kind] || [];
+      const missing = [];
+
+      Array.from(row.querySelectorAll('input')).forEach(inp => {
+        const key = (inp.name.split('.')[2] || '');
+        if (key === 'name') return;
+        const relevant = used.includes(key);
+        // Поле, которого этот тип канала не читает, гасим: заполненный CPM у internal —
+        // прямое приглашение думать, что он работает.
+        inp.closest('td').classList.toggle('dim', !relevant);
+        const need = relevant && req.includes(key) && !inp.value.trim();
+        inp.classList.toggle('need-fill', need && !!name);
+        if (need && name) missing.push(key);
+      });
+
+      if (!name) return;
+      if (missing.length) problems.push(`«${name}»: не заполнено ${missing.join(', ')}`);
+      else ready++;
+    });
+
+    if (calcBtn) {
+      calcBtn.disabled = ready === 0;
+      calcBtn.title = ready === 0 ? 'Нужен хотя бы один заполненный канал' : '';
+    }
+    warn.innerHTML = !ready
+      ? '<div class="callout bad">Ни одного рабочего канала. Расчёт даст нули, а не оценку '
+        + 'инициативы.' + (problems.length ? ' ' + escapeHtml(problems.join('; ')) + '.' : '')
+        + '</div>'
+      : (problems.length
+          ? '<div class="callout">' + escapeHtml(problems.join('; '))
+            + ' — эти каналы не дадут заявок.</div>'
+          : '');
+  };
+
+  chbody.addEventListener('input', refreshChannels);
+  chbody.addEventListener('change', refreshChannels);
+  refreshChannels();
+}

@@ -188,3 +188,21 @@ footer {
 .field.need > span em { font-style: normal; color: var(--warn); font-weight: 400; font-size: 13px; }
 .field.need input { border-color: var(--key-line); background: var(--key); }
 .callout.ok { background: #eef7f0; border-color: var(--good); }
+
+/* шаг «Допущения»: сначала чего не хватает */
+.need-head { margin-top: 26px; }
+.need-lead { max-width: 820px; margin-top: 0; }
+details.fold { padding: 0; }
+details.fold > summary {
+  cursor: pointer; padding: 16px 20px; font-size: 15px;
+}
+details.fold[open] > summary { border-bottom: 1px solid var(--line); }
+details.fold > *:not(summary) { padding: 0 20px; }
+details.fold > table { padding: 0; margin: 12px 20px; width: calc(100% - 40px); }
+table.prefilled td b { font-weight: 600; }
+table.params td.dim { opacity: .3; }
+table.params td.dim input { background: #f6f7f9; }
+input.need-fill { background: var(--key); border-color: var(--warn); }
+.chwarn:empty { display: none; }
+.chwarn { margin-top: 12px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }

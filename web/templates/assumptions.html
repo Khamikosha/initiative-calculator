@@ -59,35 +59,12 @@
 {% set tmeta = TYPE_META[init.type] %}
 <div class="callout type-note">
   <b>{{ tmeta.label }}.</b> Главный вопрос: {{ tmeta.metric }}. {{ tmeta.note }}
-  <br><small>Каналы этого типа: {{ tmeta.kinds | join(', ') }}. Ниже показаны параметры,
-  которые при таком составе каналов реально влияют на результат; остальные убраны под
-  «Прочие» — но если в них стоит ненулевое значение, они остаются на виду и продолжают
-  считаться.</small>
 </div>
 
-{% for sec, title, ps in params.SECTIONS %}
-  {% if sec not in ('meta', 'confidence') %}
-  {% set visible = ps | rejectattr('key', 'in', ('target_size', 'baseline_organic_apps_m') if (sec == 'audience' and seg_ids) else ()) | list %}
-  {% set split = params.split_by_type(visible, init.type, cfg) %}
-  {% if split[0] or split[1] %}
-  <section class="card">
-    <h3>{{ title }}</h3>
-    {% if split[0] %}{{ ptable(split[0], sec, cfg, seg_ids, chosen) }}{% endif %}
-    {% if split[1] %}
-      <details class="rest">
-        <summary>Прочие — при типе «{{ tmeta.label }}» на результат не влияют
-          ({{ split[1] | length }})</summary>
-        {{ ptable(split[1], sec, cfg, seg_ids, chosen) }}
-      </details>
-    {% endif %}
-    {% if seg_ids %}
-      <small class="muted">Пустая ячейка сегмента — берётся общее значение.
-      Размер сегмента и органика задаются на шаге «Сегменты».</small>
-    {% endif %}
-  </section>
-  {% endif %}
-  {% endif %}
-{% endfor %}
+<h2 class="need-head">Что нужно задать</h2>
+<p class="muted need-lead">Остальное подставлено из реестра и каталога продуктов —
+свёрнуто ниже. Без медиаплана считать нечего: показов не будет, а значит не будет
+ни заявок, ни инкремента.</p>
 
 <section class="card">
   <h3>Каналы</h3>
@@ -134,7 +111,24 @@
   </table>
   </div>
   <button type="button" class="ghost" id="addch">Добавить канал</button>
-  <small class="muted">Пустые строки игнорируются. Доли вводить числом: 1,5% это 0,015.</small>
+  <small class="muted">Пустые строки игнорируются. Доли вводить числом: 1,5% это 0,015.
+  Поля, выделенные жёлтым, обязательны для выбранного типа канала: без них канал
+  тратит бюджет и не даёт ни одной заявки.</small>
+  <div class="chwarn" id="chwarn"></div>
+</section>
+
+
+<section class="card">
+  <h3>Сроки и затраты</h3>
+  {% set cost_main, cost_rest = params.split_by_type(params.COSTS, init.type, cfg) %}
+  {{ ptable(cost_main, 'costs', cfg, seg_ids, chosen) }}
+  {% if cost_rest %}
+    <details class="rest">
+      <summary>Прочие затраты — при типе «{{ tmeta.label }}» на результат не влияют
+        ({{ cost_rest | length }})</summary>
+      {{ ptable(cost_rest, 'costs', cfg, seg_ids, chosen) }}
+    </details>
+  {% endif %}
 </section>
 
 <section class="card conf-card">
@@ -159,6 +153,57 @@
     {% endif %}
   </div>
 </section>
+
+
+<details class="card fold" {{ 'open' if not ready }}>
+  <summary><b>Что подставлено</b> — {{ prefilled | length }} значений, вводить не нужно</summary>
+  <table class="params prefilled">
+    <thead><tr><th>Что</th><th>Значение</th><th>Откуда</th></tr></thead>
+    <tbody>
+      {% for label, value, source in prefilled %}
+        <tr>
+          <td>{{ label }}</td>
+          <td><b>{{ value }}</b></td>
+          <td class="{{ 'muted' if source != 'введено вручную' }}">{{ source }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <small class="muted">Поправить эти значения можно на шаге «Сегменты» или ниже,
+  в полной форме параметров.</small>
+</details>
+
+<details class="card fold">
+  <summary><b>Все параметры модели</b> — для тех, кто хочет крутить руками</summary>
+  <p class="muted">Здесь всё, что читает движок. Значения уже подставлены;
+  <span class="key-legend">жёлтым</span> — те, что сильнее прочих двигают результат.
+  Под «Прочие» убрано то, что при этом типе инициативы на результат не влияет — но если
+  там стоит ненулевое значение, оно остаётся на виду и всё равно считается.</p>
+{% for sec, title, ps in params.SECTIONS %}
+  {% if sec not in ('meta', 'confidence', 'costs') %}
+  {% set visible = ps | rejectattr('key', 'in', ('target_size', 'baseline_organic_apps_m') if (sec == 'audience' and seg_ids) else ()) | list %}
+  {% set split = params.split_by_type(visible, init.type, cfg) %}
+  {% if split[0] or split[1] %}
+  <section class="card">
+    <h3>{{ title }}</h3>
+    {% if split[0] %}{{ ptable(split[0], sec, cfg, seg_ids, chosen) }}{% endif %}
+    {% if split[1] %}
+      <details class="rest">
+        <summary>Прочие — при типе «{{ tmeta.label }}» на результат не влияют
+          ({{ split[1] | length }})</summary>
+        {{ ptable(split[1], sec, cfg, seg_ids, chosen) }}
+      </details>
+    {% endif %}
+    {% if seg_ids %}
+      <small class="muted">Пустая ячейка сегмента — берётся общее значение.
+      Размер сегмента и органика задаются на шаге «Сегменты».</small>
+    {% endif %}
+  </section>
+  {% endif %}
+  {% endif %}
+{% endfor %}
+
+</details>
 
 <div class="actions sticky">
   <button class="btn">Посчитать</button>

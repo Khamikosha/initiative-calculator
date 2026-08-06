@@ -580,6 +580,35 @@ def channel_fields(kind):
     return [p for p in CHANNELS if not p.kinds or kind in p.kinds]
 
 
+# Без этих полей канал не даёт ни одной заявки. Формула не ломается — она честно
+# умножает на ноль, и человек получает правдоподобные нули вместо ошибки. Ровно так
+# на живом тесте потерялся весь расчёт: у internal-канала не заполнили response_rate.
+CHANNEL_REQUIRED = {
+    "internal": ("reach_abs", "response_rate", "cr_to_app"),
+    "perform": ("budget", "cpm", "ctr", "cr_to_app"),
+    "brand": ("budget", "cpm", "brand_uplift"),
+}
+
+
+def channel_missing(ch):
+    """Обязательные поля канала, которые не заполнены. Пустой список — канал сработает."""
+    kind = ch.get("kind") or "perform"
+    out = []
+    for k in CHANNEL_REQUIRED.get(kind, ()):
+        if ch.get(k):
+            continue
+        # показы можно задать напрямую вместо связки «бюджет + CPM»
+        if k in ("budget", "cpm") and ch.get("impressions"):
+            continue
+        out.append(k)
+    return out
+
+
+def channels_ready(cfg):
+    """Есть ли хотя бы один канал, который реально даст заявки."""
+    return any(not channel_missing(ch) for ch in (cfg.get("channels") or []))
+
+
 def defaults():
     """Конфиг из одних дефолтов — заготовка для новой инициативы."""
     out = {}

@@ -215,6 +215,47 @@ def apply_segment_defaults(cfg, product):
     return cfg
 
 
+def prefilled_summary(init, cfg):
+    """Что уже подставлено и откуда.
+
+    Показываем, но не спрашиваем: человек должен видеть, на чём считается модель,
+    и при этом не заполнять то, что система знает. Источник у каждой строки указан —
+    без него «подставлено» неотличимо от «взято с потолка».
+    """
+    rows, ue, meta = [], cfg.get("unit_economics", {}), cfg.get("meta", {})
+    if ue.get("mode") == calc.MODE_VALUE:
+        rows.append(("Экономика клиента", "готовая ценность из модели продукта",
+                     "каталог продуктов"))
+        rows.append(("Горизонт оценки", f'{meta.get("horizon_months", 0):.0f} мес',
+                     "модель продукта"))
+        rows.append(("Ставка дисконтирования",
+                     f'{meta.get("discount_rate_annual", 0) * 100:.0f}%', "модель продукта"))
+    else:
+        rows.append(("Экономика клиента", "собирается снизу вверх: баланс, ставки, отток",
+                     "у продукта нет готовой ценности"))
+
+    for seg in cfg.get("audience", {}).get("segments") or []:
+        sid = seg.get("id")
+        name = calc.SEGMENTS[sid]["name"] if sid in calc.SEGMENTS else sid
+        d = params.segment_defaults(sid, init["product"]) or {}
+        own = {k for k in ("target_size", "existing_clients", "value_per_client",
+                           "operating_income_annual") if seg.get(k) != d.get(k)}
+        pen = d.get("penetration")
+        rows.append((f"{name} — рынок", f'{seg.get("target_size", 0):,.0f} чел'.replace(",", " ")
+                     + (f' · проникновение {pen:.0%}' if pen else ""),
+                     "введено вручную" if "target_size" in own else "реестр"))
+        if seg.get("value_per_client"):
+            rows.append((f"{name} — ценность клиента",
+                         f'{seg["value_per_client"]:,.0f} ₽'.replace(",", " "),
+                         "введено вручную" if "value_per_client" in own else "каталог продуктов"))
+        if seg.get("operating_income_annual"):
+            rows.append((f"{name} — ОД на клиента",
+                         f'{seg["operating_income_annual"]:,.0f} ₽/год'.replace(",", " "),
+                         "введено вручную" if "operating_income_annual" in own
+                         else "отчётность по возрастам"))
+    return rows
+
+
 def config_of(init):
     cfg = json.loads(init["config_json"] or "{}")
     base = params.defaults()
@@ -409,7 +450,9 @@ def assumptions_form(request: Request, iid: int, error: str = ""):
     cfg = config_of(init)
     chosen = {s["id"]: s for s in (cfg.get("audience", {}).get("segments") or [])}
     return page(request, "assumptions.html", init=init, cfg=cfg, chosen=chosen,
-                step="assumptions", error=error, conf=calc.confidence_index(cfg))
+                step="assumptions", error=error, conf=calc.confidence_index(cfg),
+                prefilled=prefilled_summary(init, cfg),
+                ready=params.channels_ready(cfg))
 
 
 @app.post("/initiative/{iid}/assumptions")
