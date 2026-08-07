@@ -233,6 +233,7 @@ SCHEMA = {
     # Все поля скалярные, поэтому это обычный раздел — и веб-форма получает его даром.
     "base_activation": {
         "name": None, "eligible_clients": (0.0, 2e9), "reach_share": _RATE,
+        "workout_months": (0.0, 600.0), "monthly_inflow": (0.0, 1e9),
         "uplift_rate": _RATE, "measured_against_control": None,
         "turnover_before": (0.0, 1e9), "turnover_after": (0.0, 1e9),
         "balance_before": (0.0, 1e9), "balance_after": (0.0, 1e9),
@@ -246,7 +247,8 @@ SCHEMA = {
     "costs": {"production": _MONEY, "it_dev": _MONEY, "one_off_other": _MONEY,
               "opex_monthly": _MONEY, "campaign_months": (1, 600),
               "acq_cost_per_client": (0.0, 1e7)},
-    "rice": {"reach": (0.0, 1e9), "impact": (0.0, 10.0), "confidence": _RATE, "effort": (0.0, 1e4)},
+    "rice": {"reach": (0.0, 1e9), "impact": (0.0, 10.0), "confidence": _RATE,
+             "effort": (0.0, 1e4), "hurdle_ltv_cac": (0.5, 20.0)},
     "confidence": {k: (0, 1000) for k in ("A", "B", "B_minus", "C", "D")},
 }
 CHANNEL_KEYS = {"name": None, "kind": None, "frk_tier": (1, 4), "budget": _MONEY,
@@ -814,9 +816,18 @@ def base_activation_stream(cfg, shape, u):
     b = cfg.get("base_activation")
     if not b:
         return None
-    eligible = g(b, "eligible_clients")
-    activated = eligible * g(b, "reach_share") * g(b, "uplift_rate") * g(b, "attribution_share", 1.0)
-    if activated <= 0:
+    # СТОК и ПОТОК — разные вещи, и складывать их в одну строку «эффект в месяц»
+    # нельзя. Накопленная база конечна: её прорабатывают за workout_months и она
+    # кончается. Поток пополняется каждый месяц и работает всегда.
+    #
+    # На живом ФЭО это перевернуло картину: накопленный отток в 1,97 млн человек
+    # выглядел источником 2 206 спасений ЕЖЕМЕСЯЧНО, хотя при таком темпе базы
+    # хватило бы на 892 месяца. Реально это 2 206 один раз плюс 112 в месяц —
+    # инициатива про постоянный сервис, а не про разовую проработку базы.
+    conv = g(b, "reach_share") * g(b, "uplift_rate") * g(b, "attribution_share", 1.0)
+    stock_total = g(b, "eligible_clients") * conv
+    flow_monthly = g(b, "monthly_inflow") * conv
+    if stock_total <= 0 and flow_monthly <= 0:
         return None
 
     d_turn = g(b, "turnover_after") - g(b, "turnover_before")
@@ -829,17 +840,34 @@ def base_activation_stream(cfg, shape, u):
                   - d_turn * g(u, "cashback_rate"))
 
     decay = g(b, "decay_months")
-    cohorts = [activated * w for w in shape]
+    horizon = len(shape)
+    # Сток прорабатывается равномерно за workout_months и КОНЧАЕТСЯ; по умолчанию
+    # растягивается по форме кампании. Поток идёт ровно, каждый месяц.
+    workout = int(g(b, "workout_months", 0))
+    if workout > 0:
+        stock_cohorts = [stock_total / workout if m < min(workout, horizon) else 0.0
+                         for m in range(horizon)]
+    else:
+        stock_cohorts = [stock_total * w for w in shape]
+    flow_cohorts = [flow_monthly] * horizon
+    cohorts = [s + f for s, f in zip(stock_cohorts, flow_cohorts)]
+
     rows = []
-    for m in range(len(shape)):
+    for m in range(horizon):
         # Каждая когорта проснувшихся затухает линейно за decay_months.
         # Ноль означает «эффект держится вечно» — так почти не бывает, и validate() скажет.
-        live = sum(c * (1.0 if decay <= 0 else max(0.0, 1.0 - (m - j) / decay))
-                   for j, c in enumerate(cohorts[:m + 1]))
+        def _live(src):
+            return sum(c * (1.0 if decay <= 0 else max(0.0, 1.0 - (m - j) / decay))
+                       for j, c in enumerate(src[:m + 1]))
+        live_s, live_f = _live(stock_cohorts), _live(flow_cohorts)
+        live = live_s + live_f
         rows.append({"active_uplifted": live, "margin": live * per_client,
+                     "from_stock": live_s * per_client, "from_flow": live_f * per_client,
                      "turnover_uplift": live * d_turn, "balance_uplift": live * d_bal})
-    return {"rows": rows, "activated_total": activated,
-            "margin_per_client_m": per_client,
+    return {"rows": rows, "activated_total": sum(cohorts),
+            "activated_stock": sum(stock_cohorts), "activated_flow": sum(flow_cohorts),
+            "stock_exhausted_month": (min(workout, horizon) if workout > 0 else None),
+            "conversion": conv, "margin_per_client_m": per_client,
             "turnover_delta": d_turn, "balance_delta": d_bal}
 
 
@@ -1073,6 +1101,10 @@ def run_pl(cfg, funnel):
     # Форма притока: план продаж с сезонностью и темпом год-к-году, если он задан,
     # иначе равномерно по месяцам кампании. Уровень всегда берётся из инкремента,
     # чтобы каннибализация и deadweight не обходились планом стороной.
+    # Норма LTV/CAC, от которой считается предельная цена привлечения и контакта.
+    # Это не «хотелка», а порог, ниже которого масштабирование увеличивает убыток.
+    hurdle = g(cfg.get("rice") or {}, "hurdle_ltv_cac", 0.0) or g(
+        cfg.get("meta") or {}, "hurdle_ltv_cac", 0.0) or 3.0
     shape = acquisition_shape(cfg, h, camp_m)
     cohorts = [inc * w for w in shape]
 
@@ -1165,16 +1197,33 @@ def run_pl(cfg, funnel):
     base_detail = None
     if basact:
         rws = basact["rows"]
+        b_cfg = cfg.get("base_activation") or {}
+        act_total = basact["activated_total"]
+        margin_total = sum(x["margin"] for x in rws)
+        # Экономика КОНТАКТА, а не клиента. На инициативах по своей базе решает не
+        # конверсия, а арифметика канала: при сквозной конверсии 0,1% нужно почти
+        # тысяча контактов на один результат, и продукт за сотни рублей их не окупит.
+        conv = basact["conversion"]
+        value_per_act = margin_total / act_total if act_total > 0 else 0.0
         base_detail = {
-            "name": (cfg.get("base_activation") or {}).get("name", "Растранзачивание базы"),
-            "activated_clients": round(basact["activated_total"]),
+            "name": b_cfg.get("name", "Растранзачивание базы"),
+            "activated_clients": round(act_total),
+            "activated_from_stock": round(basact["activated_stock"]),
+            "activated_from_flow": round(basact["activated_flow"]),
+            "stock_exhausted_month": basact["stock_exhausted_month"],
+            "margin_from_stock": round(sum(x["from_stock"] for x in rws)),
+            "margin_from_flow": round(sum(x["from_flow"] for x in rws)),
             "peak_active_uplifted": round(max(x["active_uplifted"] for x in rws)),
             "end_active_uplifted": round(rws[-1]["active_uplifted"]),
             "turnover_delta_per_client": round(basact["turnover_delta"]),
             "balance_delta_per_client": round(basact["balance_delta"]),
             "margin_per_client_m": round(basact["margin_per_client_m"], 2),
             "turnover_uplift_total": round(sum(x["turnover_uplift"] for x in rws)),
-            "margin_total": round(sum(x["margin"] for x in rws))}
+            "margin_total": round(margin_total),
+            "conversion": round(conv, 6),
+            "contacts_per_activation": round(1 / conv) if conv > 0 else None,
+            "value_per_activation": round(value_per_act),
+            "max_cost_per_contact": round(value_per_act * conv / hurdle, 3)}
     return {"horizon_months": h, "effect": effect,
             "market": market_position(cfg, active_curve),
             "margin_sources": src, "linked": linked_detail, "companion": companion_detail,
@@ -1192,6 +1241,12 @@ def run_pl(cfg, funnel):
             "incremental_cpa": round(mkt_cost / inc) if inc > 0 else None,
             "ltv_per_client": round(total_gm / inc) if inc > 0 else None,
             "ltv_to_cac": round((total_gm / inc) / (mkt_cost / inc), 2) if inc > 0 and mkt_cost > 0 else None,
+            # Сколько вообще МОЖНО платить за клиента, а не сколько платим. Переворачивает
+            # разговор: вместо «дайте бюджет, посчитаем что вышло» — «клиент стоит столько,
+            # платить можно до стольки, ваш канал в это не влезает».
+            "hurdle_ltv_cac": hurdle,
+            "max_cpa": round((total_gm / inc) / hurdle) if inc > 0 else None,
+            "budget_at_max_cpa": round(inc * (total_gm / inc) / hurdle) if inc > 0 else None,
             "breakeven_clients": round(total_cost / (total_gm / inc)) if inc > 0 and total_gm > 0 else None,
             "monthly": [{kk: (round(vv) if isinstance(vv, float) else vv) for kk, vv in r.items()} for r in rows]}
 
@@ -1431,6 +1486,28 @@ def validate_extensions(cfg, f, pl):
             out.append(
                 "АТРИБУЦИЯ 100% при замере против контроля — это законно: uplift над "
                 "контролем уже инкрементален по построению. Оставлено как есть.")
+        # Сток кончается, поток — нет. Если инициативу обосновали накопленной базой,
+        # через workout_months эффект обнулится, а run-rate останется.
+        if bad["activated_from_flow"] <= 0 and bad["activated_from_stock"] > 0:
+            out.append(
+                f"ТОЛЬКО СТОК: база в {nf(g(ba, 'eligible_clients'))} человек конечна и "
+                f"прорабатывается за {bad['stock_exhausted_month'] or '—'} мес, после чего "
+                "эффект гаснет, а постоянные затраты остаются. Задайте monthly_inflow: "
+                "если в это состояние никто не попадает заново, это разовая акция, "
+                "а не сервис — и горизонт у неё должен быть коротким.")
+        elif bad["activated_from_stock"] > 0 and bad["margin_from_flow"] > bad["margin_from_stock"]:
+            out.append(
+                f"ПОТОК ВАЖНЕЕ СТОКА: накопленная база даёт {nf(bad['margin_from_stock'])} "
+                f"один раз, ежемесячное пополнение — {nf(bad['margin_from_flow'])} за горизонт. "
+                "Обосновывать инициативу надо потоком, хотя сток выглядит внушительнее.")
+        # Экономика контакта: обычно именно здесь инициатива и умирает
+        if bad.get("max_cost_per_contact") is not None:
+            out.append(
+                f"ЦЕНА КОНТАКТА: чтобы окупиться при норме LTV/CAC {pl.get('hurdle_ltv_cac')}, "
+                f"один контакт должен стоить не дороже {bad['max_cost_per_contact']} ₽. "
+                f"На один результат уходит {nf(bad['contacts_per_activation'])} контактов, "
+                f"а сам результат стоит {nf(bad['value_per_activation'])} ₽. Сверьте с "
+                "прайсом канала: платные смс такие инициативы обычно не выдерживают.")
         out.append(
             f"РАСТРАНЗАЧЕНО НЕ ЗНАЧИТ ПРИВЛЕЧЕНО: {nf(bad['activated_clients'])} клиентов "
             "сменили поведение, но они УЖЕ в базе. В АКБ и в инкремент они намеренно "
@@ -1572,8 +1649,14 @@ def flags(cfg, f, pl):
     br = f["applications_brand_lift"]
     if br and br / max(f["applications_total"], 1) > 0.4:
         out.append(f"{round(br / f['applications_total'] * 100)}% заявок держится на brand-uplift — самое недоказуемое допущение. Нужен geo-holdout или MMM.")
-    if pl["ltv_to_cac"] is not None and pl["ltv_to_cac"] < 3:
-        out.append(f"LTV/CAC = {pl['ltv_to_cac']} на {pl['horizon_months']} мес (норма ≥3).")
+    if pl["ltv_to_cac"] is not None and pl["ltv_to_cac"] < pl.get("hurdle_ltv_cac", 3):
+        over = (pl["incremental_cpa"] / pl["max_cpa"]) if pl.get("max_cpa") else None
+        out.append(
+            f"LTV/CAC = {pl['ltv_to_cac']} на {pl['horizon_months']} мес "
+            f"(норма ≥{pl.get('hurdle_ltv_cac', 3)}). Платить за клиента можно "
+            f"до {nf(pl['max_cpa'])} ₽, фактически платим {nf(pl['incremental_cpa'])} ₽"
+            + (f" — превышение в {over:.1f} раза." if over else ".")
+            + f" Бюджет, который эта экономика выдерживает: {nf(pl['budget_at_max_cpa'])} ₽.")
     if pl["payback_months"] is None and pl.get("mode") != MODE_VALUE:
         out.append("Окупаемости на заданном горизонте нет.")
     if pl.get("acquisition_payout_total"):

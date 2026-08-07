@@ -558,6 +558,69 @@ check("Чем выше отток связанного, тем сильнее р
 check("Удержание всё же накапливает эффект, а не обнуляется",
       _ret_low > 0 and _ret_high > 0)
 
+# --- сток и поток: накопленная база кончается, пополнение работает всегда --------
+# На живом ФЭО накопленный отток в 1,97 млн подавался как источник 2 206 спасений
+# ЕЖЕМЕСЯЧНО, хотя при таком темпе базы хватило бы на 892 месяца.
+_sf = {
+    "meta": {"name": "сток и поток", "type": "comms", "horizon_months": 24},
+    "audience": {"target_size": 1000},
+    "base_activation": {"eligible_clients": 1_000_000, "workout_months": 3,
+                        "monthly_inflow": 50_000, "reach_share": 0.7,
+                        "uplift_rate": 0.01, "measured_against_control": "да",
+                        "turnover_before": 0, "turnover_after": 5000,
+                        "balance_before": 0, "balance_after": 2000,
+                        "decay_months": 12},
+    "unit_economics": {"interchange_rate": 0.011, "cashback_rate": 0.003,
+                       "nim_annual": 0.07, "monthly_churn": 0.03},
+    "costs": {"campaign_months": 24}, "funnel": {}, "rice": {"hurdle_ltv_cac": 3.0},
+}
+_r_sf = calc.analyze(calc.resolve_segments(calc.normalize(copy.deepcopy(_sf))))
+_b = _r_sf["pl"]["base_activation"]
+check("Сток и поток считаются порознь, а не одной строкой",
+      _b["activated_from_stock"] > 0 and _b["activated_from_flow"] > 0)
+check("Сток кончается на заданном месяце и больше не пополняется",
+      _b["stock_exhausted_month"] == 3,
+      f'из стока {_b["activated_from_stock"]:,.0f}, из потока {_b["activated_from_flow"]:,.0f}')
+check("Сток равен базе × конверсия, а не базе × конверсия × месяцы",
+      abs(_b["activated_from_stock"] - 1_000_000 * 0.7 * 0.01) < 1,
+      "иначе накопленную базу пересчитывали бы каждый месяц заново")
+check("Поток за горизонт равен месячному пополнению × месяцы",
+      abs(_b["activated_from_flow"] - 50_000 * 0.7 * 0.01 * 24) < 1)
+
+_no_flow = copy.deepcopy(_sf)
+_no_flow["base_activation"]["monthly_inflow"] = 0
+_r_nf = calc.analyze(calc.resolve_segments(calc.normalize(_no_flow)))
+check("Инициатива на одном стоке помечается: эффект кончится, затраты останутся",
+      any("ТОЛЬКО СТОК" in m for m in _r_nf["validation"]))
+check("Без пополнения активных к концу горизонта не остаётся",
+      _r_nf["pl"]["base_activation"]["end_active_uplifted"] == 0)
+
+# --- предельная цена контакта и предельный CPA -----------------------------------
+# Метрика, которая закрывает вопрос «на какой бюджет»: не сколько платим,
+# а сколько вообще МОЖНО платить.
+check("Предельная цена контакта считается от ценности результата и конверсии",
+      _b["max_cost_per_contact"] is not None and _b["contacts_per_activation"] > 0)
+_expected = _b["value_per_activation"] * _b["conversion"] / 3.0
+check("Предельная цена контакта = ценность × конверсия / норма",
+      abs(_b["max_cost_per_contact"] - _expected) < 0.01,
+      f'{_b["max_cost_per_contact"]} против {_expected:.3f}')
+check("Экономика контакта доносится словами, а не только числом",
+      any("ЦЕНА КОНТАКТА" in m for m in _r_sf["validation"]))
+
+_frk = calc.analyze(calc.resolve_segments(json.loads(
+    (CASES / "frk1_debit_card.json").read_text(encoding="utf-8"))))
+_p = _frk["pl"]
+check("Предельный CPA считается от LTV и нормы LTV/CAC",
+      _p["max_cpa"] is not None and
+      abs(_p["max_cpa"] - _p["ltv_per_client"] / _p["hurdle_ltv_cac"]) <= 1)
+check("Бюджет, который выдерживает экономика, выводится, а не спрашивается",
+      _p["budget_at_max_cpa"] is not None and _p["budget_at_max_cpa"] > 0)
+check("Норма LTV/CAC берётся из конфига, а не зашита",
+      calc.analyze(calc.resolve_segments(
+          dict(json.loads((CASES / "frk1_debit_card.json").read_text(encoding="utf-8")),
+               rice={"reach": 0, "impact": 2, "confidence": 0.6, "effort": 12,
+                     "hurdle_ltv_cac": 5.0})))["pl"]["max_cpa"] < _p["max_cpa"])
+
 zero_conv = copy.deepcopy(BASE)
 for ch in zero_conv["channels"]:
     ch["cr_to_app"] = 0; ch["brand_uplift"] = 0

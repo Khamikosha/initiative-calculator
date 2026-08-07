@@ -27,7 +27,8 @@
   <div class="tile"><span>Инкрементальный CPA</span><b>{{ pl.incremental_cpa | money(CUR) }}</b></div>
   <div class="tile"><span>Окупаемость</span>
     <b>{{ (pl.payback_months ~ " мес") if pl.payback_months else "нет" }}</b></div>
-  <div class="tile"><span>LTV / CAC</span><b>{{ pl.ltv_to_cac if pl.ltv_to_cac is not none else "—" }}</b></div>
+  <div class="tile"><span>LTV / CAC</span><b>{{ pl.ltv_to_cac if pl.ltv_to_cac is not none else "—" }}</b>
+    {% if pl.max_cpa %}<small>платить можно до {{ pl.max_cpa | money(CUR) }}</small>{% endif %}</div>
 </div>
 
 <section class="card">
@@ -166,15 +167,26 @@
   прирост оборота и остатка, а не клиент.</p>
   <div class="funnel">
     <div><span>Сменили поведение</span><b>{{ ba.activated_clients | num }}</b>
-         <small>на пике активно {{ ba.peak_active_uplifted | num }},
-         на конец {{ ba.end_active_uplifted | num }}</small></div>
+         <small>из стока {{ ba.activated_from_stock | num }}
+         {% if ba.stock_exhausted_month %}(кончается на {{ ba.stock_exhausted_month }} мес){% endif %}
+         · из потока {{ ba.activated_from_flow | num }}</small></div>
     <div><span>Прирост на клиента</span><b>{{ ba.turnover_delta_per_client | money(CUR) }}/мес</b>
          <small>остаток +{{ ba.balance_delta_per_client | money(CUR) }}</small></div>
     <div class="last"><span>Маржа</span><b>{{ ba.margin_total | mln(CUR) }}</b>
          <small>{{ ba.margin_per_client_m }} ₽/мес с одного проснувшегося</small></div>
   </div>
-  <small class="muted">Растранзаченные <b>не идут ни в АКБ, ни в инкремент</b> — они уже
-  в базе. Иначе один человек посчитался бы дважды, как новый и как проснувшийся.</small>
+  <table class="grid">
+    <tr><th colspan="2">Экономика контакта — здесь такие инициативы обычно и умирают</th></tr>
+    <tr><td>Сквозная конверсия</td><td class="r">{{ ba.conversion | pct(3) }}</td></tr>
+    <tr><td>Контактов на один результат</td><td class="r">{{ ba.contacts_per_activation | num }}</td></tr>
+    <tr><td>Ценность одного результата</td><td class="r">{{ ba.value_per_activation | money(CUR) }}</td></tr>
+    <tr><td><b>Предельная цена контакта</b></td>
+        <td class="r"><b>{{ ba.max_cost_per_contact }} {{ CUR }}</b></td></tr>
+  </table>
+  <small class="muted">Сток конечен: {{ ba.margin_from_stock | mln(CUR) }} один раз,
+  поток {{ ba.margin_from_flow | mln(CUR) }} за горизонт. Растранзаченные
+  <b>не идут ни в АКБ, ни в инкремент</b> — они уже в базе, иначе один человек
+  посчитался бы дважды.</small>
 </section>
 {% endif %}
 
