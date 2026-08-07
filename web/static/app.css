@@ -206,3 +206,29 @@ input.need-fill { background: var(--key); border-color: var(--warn); }
 .chwarn:empty { display: none; }
 .chwarn { margin-top: 12px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ------------------------------------------------------------------ шаг «Бриф» */
+/* Таблица утверждений: ширины заданы в шаблоне процентами, здесь только поведение. */
+table.claims { width: 100%; border-collapse: collapse; }
+table.claims th {
+  text-align: left; font-weight: 600; font-size: .85rem;
+  color: var(--muted); padding: .4rem .5rem .5rem 0;
+}
+table.claims td { vertical-align: top; padding: .25rem .5rem .25rem 0; }
+table.claims textarea,
+table.claims input,
+table.claims select { width: 100%; box-sizing: border-box; }
+table.claims textarea { resize: vertical; min-height: 3.2em; }
+/* Скрытые поля не должны оставлять дыру: строка и так высокая из-за двух textarea. */
+table.claims [hidden] { display: none; }
+table.claims .del { padding: .2rem .5rem; line-height: 1; }
+
+/* Описание инициативы показывается дословно — это исходник, а не пересказ. */
+.quote {
+  border-left: 3px solid var(--muted); padding: .1rem 0 .1rem .8rem;
+  margin: .5rem 0; white-space: pre-wrap;
+}
+
+table.hints { border-collapse: collapse; margin-top: .5rem; font-size: .9rem; }
+table.hints td { padding: .2rem 1.2rem .2rem 0; vertical-align: top; }
+table.hints td:first-child { color: var(--muted); white-space: nowrap; }

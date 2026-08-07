@@ -7,6 +7,17 @@ def g(d, k, default=0.0):
     v = d.get(k, default)
     return default if v is None else v
 
+
+def nf(x, dec=0):
+    """Число с пробелами в разрядах.
+
+    Раньше разряды разделялись заменой запятых на пробелы во всей строке сообщения.
+    Вместе с разделителями разрядов это съедало и обычные запятые текста:
+    «1 220 000 клиентов  а не по медиаворонке». Форматировать надо ЧИСЛО,
+    а не предложение вокруг него.
+    """
+    return format(x, f",.{dec}f").replace(",", " ")   # тонкая шпация как разделитель
+
 # ------------------------------------------------------------------ ВОЗРАСТНЫЕ СЕГМЕНТЫ
 SEGMENTS = {
     "kids":  {"name": "Дети (0–13)",       "age_min": 0,  "age_max": 13},
@@ -172,12 +183,12 @@ def resolve_segments(cfg):
             free = r["target_size"] - r["existing_clients"]
             notes.append(
                 f"ПРОНИКНОВЕНИЕ: в сегменте «{r['name']}» уже {r['penetration']:.0%} рынка — "
-                f"клиенты банка. Незанятого рынка остаётся {free:,.0f} чел из "
-                f"{r['target_size']:,.0f}. Модель считает охват против ВСЕЙ ЦА, поэтому если "
+                f"клиенты банка. Незанятого рынка остаётся {nf(free)} чел из "
+                f"{nf(r['target_size'])}. Модель считает охват против ВСЕЙ ЦА, поэтому если "
                 "инициатива про привлечение НОВЫХ клиентов, инкремент завышен: возьмите "
                 "target_size равным незанятому рынку. Если инициатива про кросс-продажу "
                 "своей базе — всё верно, но растёт ОД, а не АКБ."
-                .replace(",", " "))
+                )
 
     total = sum(r["_clients"] for r in live)
     for r in rows:
@@ -209,16 +220,25 @@ FUNNEL_KEYS = {"approval_rate": _RATE, "activation_rate": _RATE,
 
 SCHEMA = {
     "meta": {"name": None, "type": None, "product": None,
+             "currency": None, "fx_to_rub": (0.0, 1e6),
              "horizon_months": (1, 600), "discount_rate_annual": (0.0, 2.0)},
     "audience": {"target_size": (0.0, 2e9), "baseline_organic_apps_m": (0.0, 1e9),
-                 "halo_months": (0.0, 60.0), "halo_decay": _RATE, "segments": None},
+                 "halo_months": (0.0, 60.0), "halo_decay": _RATE, "segments": None,
+                 "reachable_market": (0.0, 2e9), "market_total": (0.0, 2e9)},
     "funnel": dict(FUNNEL_KEYS),
-    "unit_economics": {**UE_KEYS, "mode": None, "value_horizon_months": (1, 600)},
+    "unit_economics": {**UE_KEYS, "mode": None, "value_horizon_months": (1, 600),
+                       "turnover_split": None, "balance_to_turnover": (0.0, 10.0)},
+    "acquisition": {"year1_target": (0.0, 1e9), "yoy_growth": (0.0, 5.0), "seasonality": None},
+    "brief": None,              # проверяется отдельно: есть вложенные объекты
+    "pilot": None,
+    "linked_client": None,
+    "companion": None,
+    "partner": None,
     "costs": {"production": _MONEY, "it_dev": _MONEY, "one_off_other": _MONEY,
               "opex_monthly": _MONEY, "campaign_months": (1, 600),
               "acq_cost_per_client": (0.0, 1e7)},
     "rice": {"reach": (0.0, 1e9), "impact": (0.0, 10.0), "confidence": _RATE, "effort": (0.0, 1e4)},
-    "confidence": {k: (0, 1000) for k in "ABCD"},
+    "confidence": {k: (0, 1000) for k in ("A", "B", "B_minus", "C", "D")},
 }
 CHANNEL_KEYS = {"name": None, "kind": None, "frk_tier": (1, 4), "budget": _MONEY,
                 "cpm": (0.0, 1e6), "ctr": _RATE, "cr_to_app": _RATE, "response_rate": _RATE,
@@ -229,6 +249,66 @@ SEGMENT_KEYS = {"id": None, "target_size": (0.0, 2e9), "reachable_share": _RATE,
                 "baseline_organic_apps_m": (0.0, 1e9), "acq_cost_per_client": (0.0, 1e7),
                 **FUNNEL_KEYS, **UE_KEYS}
 CHANNEL_KINDS = ("internal", "perform", "brand")
+
+# --- связанный клиент ---------------------------------------------------------
+# Инициатива приносит деньги не только на носителе продукта. Детская карта живёт
+# на родителе: он не уходит из банка, возвращается, если ушёл, и покупает больше,
+# потому что банк теперь знает, что у него есть ребёнок. Три РАЗНЫЕ механики
+# с разной проверяемостью — усреднять их в один «uplift» нельзя.
+LINKED_KEYS = {"name": None, "clients_per_linked": (0.01, 100.0),
+               "income_annual": (0.0, 1e10), "margin_rate": _RATE,
+               "attribution_share": _RATE, "sources": None,
+               "churn_annual": _RATE, "churn_reduction": _RATE,
+               "cross_sell_uplift": (0.0, 2.0)}
+# Откуда берётся связанный клиент. Доли ОДНОГО плана, в сумме 1.0 — а не три
+# независимых плана: независимые не сходятся и дают отрицательных «новых».
+LINKED_SOURCE_KEYS = {"own_base": _RATE, "reactivated": _RATE, "new": _RATE}
+
+# --- продукт-спутник ----------------------------------------------------------
+COMPANION_KEYS = {"name": None, "attach_rate": _RATE, "funded_rate": _RATE,
+                  "avg_balance": (0.0, 1e10), "nim_annual": (-1.0, 1.0),
+                  "balance_growth_m": (0.0, 1.0), "spend_share": _RATE,
+                  "spend_returns_to_turnover": None}
+
+# --- партнёр ------------------------------------------------------------------
+PARTNER_KEYS = {"name": None, "turnover_split": None, "fee_per_card": (0.0, 1e7),
+                "cost_per_card": (0.0, 1e7)}
+
+# Разложение оборота по типам операций: у POS, e-POS и снятия разные ставки,
+# и один усреднённый interchange_rate прячет это различие. Доли — в сумме 1.0.
+TXN_KEYS = {"share": _RATE, "fee": _RATE}
+
+# --- разбор брифа -------------------------------------------------------------
+# Человек описывает инициативу словами: «спецдизайн, партнёры со скидками, был пилот
+# в Москве, выдаём по всей стране». Раньше из этого в модель попадало ровно одно —
+# название. Остальное испарялось молча, а человек оставался уверен, что его пилот
+# и его партнёров посчитали. Тихая потеря данных дороже неверной цифры: неверную
+# видно, а эту нет.
+#
+# Поэтому каждое утверждение из описания обязано получить статус:
+#   applied  — стало параметром (обязателен maps_to)
+#   question — нужен ответ человека, без него посчитать нельзя
+#   ignored  — сознательно не учитываем (обязателен reason)
+# Всё, что не applied, печатается в отчёте отдельным списком.
+BRIEF_KEYS = {"description": None, "claims": None}
+CLAIM_KEYS = {"claim": None, "implication": None, "maps_to": None,
+              "grade": None, "status": None, "reason": None}
+CLAIM_STATUS = ("applied", "question", "ignored")
+
+# --- пилот как ИСТОЧНИК ДАННЫХ ------------------------------------------------
+# «Пилот» в meta.type означает «оцениваем, стоит ли делать пилот». «У нас уже был
+# пилот» — совсем другое: это факт, которым калибруется модель. Две разные сущности
+# лежали в одном поле. Пилот, который провели и не использовали в расчёте, —
+# это выброшенные деньги.
+PILOT_KEYS = {"name": None, "geography": None, "rollout_geography": None,
+              "audience": None, "control_group": None,
+              "sample_size": (0.0, 1e9), "control_size": (0.0, 1e9),
+              "duration_months": (0.0, 600.0),
+              "baseline_rate": _RATE, "observed_rate": _RATE,
+              "scale_haircut": (0.0, 2.0), "metrics": None}
+# Какие параметры пилот имеет право переопределить и куда они ложатся.
+PILOT_TARGET = {**{k: "funnel" for k in FUNNEL_KEYS},
+                **{k: "unit_economics" for k in UE_KEYS}}
 
 # Два способа задать экономику клиента.
 #   build_up        — собрать снизу вверх: баланс, оборот, ставки, отток, ramp. Даёт помесячную
@@ -271,6 +351,29 @@ def _check_keys(d, allowed, where, errs):
             errs.append(f"{where}.{k} = {v} вне диапазона {rng[0]}…{rng[1]}.{tail}")
 
 
+def _check_split(split, where, errs):
+    """Разложение оборота по типам операций: словарь {имя: {share, fee}}, доли в сумме 1.0."""
+    if split is None:
+        return
+    if not isinstance(split, dict):
+        errs.append(f"{where}: должен быть объектом {{тип: {{share, fee}}}}, "
+                    f"получен {type(split).__name__}.")
+        return
+    total = 0.0
+    for name, part in split.items():
+        if not isinstance(part, dict):
+            errs.append(f"{where}.{name}: должен быть объектом с ключами share и fee.")
+            continue
+        _check_keys(part, TXN_KEYS, f"{where}.{name}", errs)
+        v = part.get("share")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            total += v
+    if split and abs(total - 1.0) > 0.005:
+        errs.append(f"{where}: доли операций в сумме дают {total:.3f}, а должны 1.0. "
+                    "Недостающая доля оборота молча не приносит комиссии, "
+                    "а лишняя приносит её дважды.")
+
+
 def validate_config(cfg):
     """Строгая проверка: неизвестный ключ или значение вне диапазона — ошибка, а не дефолт."""
     if not isinstance(cfg, dict):
@@ -283,12 +386,100 @@ def validate_config(cfg):
         errs.append(f"Неизвестный раздел «{sec}».{_hint(sec, known)}")
     for sec, allowed in SCHEMA.items():
         val = cfg.get(sec)
-        if val is None:
+        if val is None or allowed is None:
             continue
         if not isinstance(val, dict):
             errs.append(f"Раздел «{sec}» должен быть объектом, получен {type(val).__name__}.")
         else:
             _check_keys(val, allowed, sec, errs)
+
+    # разделы с вложенными объектами — своя проверка
+    for sec, allowed in (("linked_client", LINKED_KEYS), ("companion", COMPANION_KEYS),
+                         ("partner", PARTNER_KEYS), ("brief", BRIEF_KEYS),
+                         ("pilot", PILOT_KEYS)):
+        val = cfg.get(sec)
+        if val is None:
+            continue
+        if not isinstance(val, dict):
+            errs.append(f"Раздел «{sec}» должен быть объектом, получен {type(val).__name__}.")
+            continue
+        _check_keys(val, allowed, sec, errs)
+    lc = cfg.get("linked_client") or {}
+    if isinstance(lc, dict) and lc.get("sources") is not None:
+        src = lc["sources"]
+        if not isinstance(src, dict):
+            errs.append("linked_client.sources: должен быть объектом "
+                        "{own_base, reactivated, new}.")
+        else:
+            _check_keys(src, LINKED_SOURCE_KEYS, "linked_client.sources", errs)
+            tot = sum(v for v in src.values()
+                      if isinstance(v, (int, float)) and not isinstance(v, bool))
+            if abs(tot - 1.0) > 0.005:
+                errs.append(
+                    f"linked_client.sources: доли источников в сумме дают {tot:.3f}, "
+                    "а должны 1.0. Это доли ОДНОГО плана. Если задавать источники "
+                    "независимыми планами, они не сойдутся: на живой модели «новые» "
+                    "получались вычитанием и уходили в минус на 32 месяца из 36.")
+    # Каждое утверждение брифа обязано иметь судьбу. Незаполненный статус — не мелочь
+    # оформления: именно так утверждение и теряется, оставаясь «вроде бы учтённым».
+    claims = (cfg.get("brief") or {}).get("claims")
+    if claims is not None:
+        if not isinstance(claims, list):
+            errs.append("brief.claims: должен быть списком утверждений из описания.")
+        else:
+            for i, cl in enumerate(claims):
+                where = f"brief.claims[{i}]"
+                if not isinstance(cl, dict):
+                    errs.append(f"{where}: должен быть объектом.")
+                    continue
+                _check_keys(cl, CLAIM_KEYS, where, errs)
+                if not cl.get("claim"):
+                    errs.append(f"{where}.claim: пустая цитата из описания.")
+                st = cl.get("status")
+                if st not in CLAIM_STATUS:
+                    errs.append(f"{where}.status = «{st}» — допустимы только "
+                                f"{', '.join(CLAIM_STATUS)}. Утверждение без статуса — "
+                                "это и есть потерянное утверждение.")
+                elif st == "applied" and not cl.get("maps_to"):
+                    errs.append(f"{where}: статус applied, но не указан maps_to. "
+                                "«Учтено» без указания параметра проверить нельзя.")
+                elif st == "ignored" and not cl.get("reason"):
+                    errs.append(f"{where}: статус ignored, но не указана reason. "
+                                "Сознательно выброшенное утверждение требует причины — "
+                                "иначе это не решение, а недосмотр.")
+                gr = cl.get("grade")
+                if gr is not None and gr not in GRADE_W:
+                    errs.append(f"{where}.grade = «{gr}» — допустимы {', '.join(GRADE_W)}.")
+
+    pil = cfg.get("pilot")
+    if isinstance(pil, dict):
+        mt = pil.get("metrics")
+        if mt is not None:
+            if not isinstance(mt, dict):
+                errs.append("pilot.metrics: должен быть объектом {параметр: значение}.")
+            else:
+                _check_keys(mt, {**FUNNEL_KEYS, **UE_KEYS}, "pilot.metrics", errs)
+        for a, b in (("sample_size", "control_size"),):
+            if pil.get("control_group") and not pil.get(b) and pil.get(a):
+                errs.append(f"pilot.{b}: заявлена контрольная группа, но её размер не задан — "
+                            "без него нельзя проверить, мог ли пилот вообще поймать эффект.")
+
+    _check_split((cfg.get("unit_economics") or {}).get("turnover_split"),
+                 "unit_economics.turnover_split", errs)
+    _check_split((cfg.get("partner") or {}).get("turnover_split"),
+                 "partner.turnover_split", errs)
+
+    seas = (cfg.get("acquisition") or {}).get("seasonality")
+    if seas is not None:
+        if not isinstance(seas, list) or not all(
+                isinstance(x, (int, float)) and not isinstance(x, bool) for x in seas):
+            errs.append("acquisition.seasonality: должен быть списком из 12 чисел "
+                        "(множители по месяцам, среднее ≈ 1).")
+        elif len(seas) != 12:
+            errs.append(f"acquisition.seasonality: получено {len(seas)} значений, нужно 12 — "
+                        "профиль задаётся на календарный год и повторяется дальше.")
+        elif sum(seas) <= 0:
+            errs.append("acquisition.seasonality: сумма множителей = 0, притока не будет.")
 
     chans = cfg.get("channels") or []
     if not isinstance(chans, list):
@@ -324,10 +515,337 @@ def validate_config(cfg):
     return cfg
 
 
+def mde(rate, n_per_group):
+    """Минимальный эффект, который выборка такого размера способна отличить от шума.
+
+    Обратная к n ≈ 16·p·(1−p)/d² при α=0,05 и мощности 80%. Нужна, чтобы задать
+    прошедшему пилоту вопрос, который ему обычно не задают: а мог ли он вообще
+    доказать то, что докладывает? Пилот на восемьсот человек не ловит два пункта
+    конверсии, и «показал эффективность» там означает «мы что-то увидели».
+    """
+    if not n_per_group or rate <= 0 or rate >= 1:
+        return None
+    return math.sqrt(16.0 * rate * (1 - rate) / n_per_group)
+
+
+def apply_pilot(cfg):
+    """Пилот как ИСТОЧНИК ДАННЫХ: переносит факт в параметры и записывает, что сделал.
+
+    Переопределение параметров — ровно тот класс тихих ошибок, который движок ловит
+    у других. Разница в том, что здесь каждая подстановка попадает в отчёт строкой:
+    что заменено, на что, с каким коэффициентом переноса и каким грейдом.
+    """
+    p = cfg.get("pilot")
+    if not p:
+        return cfg
+    cfg = copy.deepcopy(cfg)
+    notes, applied = [], []
+    label = p.get("name") or "пилот"
+
+    same_geo = (not p.get("rollout_geography")
+                or p.get("geography") == p.get("rollout_geography"))
+    haircut = g(p, "scale_haircut", 1.0)
+    grade = "A" if same_geo else "B_minus"
+
+    if not same_geo:
+        notes.append(
+            f"ПИЛОТ — ПЕРЕНОС ГЕОГРАФИИ: «{label}» проведён в «{p['geography']}», "
+            f"а разворачивается на «{p['rollout_geography']}». Это грейд B−, а не A: "
+            "тот же перенос с чужого рынка, только внутри страны. Конверсия, оборот "
+            "и медиаинфляция в регионах другие — цифры пилота сюда переносятся "
+            "с коэффициентом, а не как есть.")
+    if haircut >= 1.0 and p.get("metrics"):
+        notes.append(
+            "ПИЛОТ БЕЗ КОЭФФИЦИЕНТА ПЕРЕНОСА: scale_haircut = 1.0, то есть результат "
+            "пилота переносится на масштаб целиком. Так почти никогда не бывает: пилот "
+            "катят на лояльной базе, в лучшей географии и с ручным вниманием команды. "
+            "Задайте scale_haircut явно — это допущение, а не отсутствие допущения.")
+
+    # Коэффициент переноса режет ПРИРОСТ, который обещает пилот, а не абсолютный уровень.
+    # Иначе выходит абсурд: пилот дал конверсию 61% при заложенных в модель 55%,
+    # осторожный коэффициент 0,75 превращает это в 45,75% — то есть чем аккуратнее
+    # мы переносим хорошую новость, тем хуже становится база, которая была и без пилота.
+    # Правильно: 55% + (61% − 55%) × 0,75 = 59,5%. Осторожность применяется к дельте.
+    for k, v in (p.get("metrics") or {}).items():
+        sec = PILOT_TARGET.get(k)
+        if not sec:
+            continue
+        was = cfg.setdefault(sec, {}).get(k)
+        has_base = isinstance(was, (int, float)) and not isinstance(was, bool)
+        new = (was + (v - was) * haircut) if has_base else v * haircut
+        cfg[sec][k] = new
+        applied.append({"param": f"{sec}.{k}", "pilot_value": v,
+                        "applied_value": new, "previous": was if has_base else None,
+                        "grade": grade})
+        notes.append(
+            f"ИЗ ПИЛОТА: {sec}.{k} = {new:.6g} — "
+            + (f"было {was:.6g}, пилот даёт {v:.6g}, перенесли {haircut:.0%} прироста"
+               if has_base else
+               f"факт пилота {v:.6g} × коэффициент переноса {haircut:g}, базы в конфиге не было")
+            + f". Грейд {grade}.")
+
+    # Доказательность: контрольная группа и мощность выборки.
+    obs, base = g(p, "observed_rate"), g(p, "baseline_rate")
+    uplift = obs - base if (obs and base) else None
+    power = None
+    if not p.get("control_group"):
+        notes.append(
+            f"ПИЛОТ БЕЗ КОНТРОЛЬНОЙ ГРУППЫ: «{label}» измерял результат без контроля. "
+            "«Показал эффективность» в таком дизайне означает «мы что-то сделали, "
+            "и что-то произошло»: отделить эффект инициативы от сезона, органики "
+            "и параллельных активностей нечем. Все цифры из этого пилота — грейд C, "
+            "а не A, каким бы своим ни был источник.")
+    elif uplift is not None:
+        n = min(g(p, "sample_size"), g(p, "control_size")) or g(p, "sample_size")
+        d_min = mde(base, n)
+        if d_min:
+            power = {"observed_uplift": round(uplift, 4), "min_detectable": round(d_min, 4),
+                     "n_per_group": round(n), "conclusive": uplift >= d_min}
+            if uplift < d_min:
+                notes.append(
+                    f"ПИЛОТ НИЧЕГО НЕ ДОКАЗАЛ: наблюдаемый прирост {uplift:.1%} меньше "
+                    f"минимального, который эта выборка способна отличить от шума "
+                    f"({d_min:.1%} при {round(n):,} на группу). Результат статистически "
+                    "неотличим от нуля — на нём нельзя строить решение о масштабировании. "
+                    f"Чтобы поймать {uplift:.1%}, нужно около "
+                    f"{round(16 * base * (1 - base) / uplift ** 2):,} на группу."
+                    .replace(",", " "))
+            else:
+                notes.append(f"ПИЛОТ ДОКАЗАТЕЛЕН: прирост {uplift:.1%} против минимально "
+                             f"различимого {d_min:.1%} при {round(n):,} на группу."
+                             .replace(",", " "))
+    if p.get("audience"):
+        notes.append(f"ОТБОР В ПИЛОТЕ: аудитория «{p['audience']}». Если она отличается "
+                     "от аудитории раскатки, разница в конверсии объясняется отбором, "
+                     "а не продуктом. На холодной аудитории результат будет ниже.")
+
+    cfg["_pilot"] = {"name": label, "grade": grade, "scale_haircut": haircut,
+                     "same_geography": same_geo, "control_group": bool(p.get("control_group")),
+                     "applied": applied, "power": power, "uplift": uplift}
+    cfg.setdefault("_notes", []).extend(notes)
+    return cfg
+
+
+def brief_coverage(cfg):
+    """Что из сказанного человеком дошло до модели, а что осталось за бортом."""
+    b = cfg.get("brief")
+    if not b:
+        return None
+    claims = b.get("claims") or []
+    by = {s: [c for c in claims if c.get("status") == s] for s in CLAIM_STATUS}
+    return {"total": len(claims),
+            "applied": len(by["applied"]), "questions": len(by["question"]),
+            "ignored": len(by["ignored"]),
+            "coverage": round(len(by["applied"]) / len(claims), 2) if claims else None,
+            "open_questions": [{"claim": c["claim"], "implication": c.get("implication")}
+                               for c in by["question"]],
+            "not_counted": [{"claim": c["claim"], "reason": c.get("reason")}
+                            for c in by["ignored"]],
+            "parameters": [{"claim": c["claim"], "maps_to": c["maps_to"],
+                            "grade": c.get("grade")} for c in by["applied"]]}
+
+
+def normalize(cfg):
+    """Производные вводные, которые нельзя задавать независимо друг от друга.
+
+    Средний баланс и месячный оборот — не два свободных параметра: остаток на карте
+    это доля прошедших через неё денег. Заданные порознь, они легко противоречат
+    друг другу (оборот 30 тыс при остатке 300 тыс), и модель считает без ошибок.
+
+    Выполняется ДО сведения сегментов и применяется к КАЖДОМУ сегменту от его
+    собственного оборота. Если вывести баланс один раз глобально и подставить после
+    взвешивания, ломается точность, ради которой веса и подобраны: ставки взвешены
+    по базе, к которой применяются, и `баланс_средн × NIM_средн` обязан совпадать
+    с посегментной суммой ТОЧНО. Глобальная подстановка расходилась с книгой
+    на 28 млн ₽ NPV — и это ловилось только сверкой с Excel.
+    """
+    u = cfg.get("unit_economics") or {}
+    ratio = g(u, "balance_to_turnover")
+    if ratio <= 0:
+        return cfg
+    notes = []
+
+    def derive(block, where):
+        turn = block.get("monthly_turnover")
+        if turn is None:
+            return
+        derived = turn * ratio
+        was = block.get("avg_balance")
+        block["avg_balance"] = derived
+        tail = (f" (заданное {nf(was)} перекрыто)"
+                if isinstance(was, (int, float)) and abs(was - derived) > 1 else "")
+        notes.append(f"ПРОИЗВОДНАЯ ВЕЛИЧИНА: {where} баланс = {ratio:.0%} от оборота "
+                     f"{nf(turn)} → {nf(derived)}{tail}.")
+
+    segs = (cfg.get("audience") or {}).get("segments") or []
+    for s in segs:
+        if isinstance(s, dict):
+            derive(s, f"сегмент «{s.get('id')}»:")
+    derive(u, "общий:")
+    cfg.setdefault("_notes", []).extend(notes)
+    return cfg
+
+
 def load_config(src):
-    """Читает кейс, проверяет по схеме и сводит сегменты. Единственная точка входа."""
+    """Читает кейс, проверяет по схеме и готовит к расчёту. Единственная точка входа.
+
+    Порядок обязателен и проверен сверкой с Excel:
+      validate  — до всего, чтобы дальше работать с заведомо корректным конфигом;
+      pilot     — подставляет свой факт в общие funnel и unit_economics, чтобы сегменты
+                  без собственных значений его унаследовали, а сегменты со своими перебили;
+      normalize — выводит производный баланс от оборота ПОСЕГМЕНТНО, до взвешивания;
+      segments  — сводит всё в один взвешенный набор допущений.
+
+    normalize обязан идти между пилотом и сегментами. Раньше он стоял последним и
+    перетирал взвешенный баланс одним глобальным числом — расхождение с книгой 28 млн ₽.
+    """
     cfg = json.load(open(src, encoding="utf-8")) if src else json.load(sys.stdin)
-    return resolve_segments(validate_config(cfg))
+    return resolve_segments(normalize(apply_pilot(validate_config(cfg))))
+
+
+def split_fee(split, fallback):
+    """Средневзвешенная ставка комиссии по типам операций.
+
+    Одна усреднённая ставка interchange прячет то, что POS, e-POS и снятие
+    оплачиваются по-разному и их доли двигаются независимо: рост доли онлайна
+    меняет доход при неизменном обороте.
+    """
+    if not split:
+        return fallback
+    return sum(g(p, "share") * g(p, "fee") for p in split.values())
+
+
+def is_plan_driven(cfg):
+    """Объём задан планом продаж, а не медиаворонкой."""
+    return g(cfg.get("acquisition") or {}, "year1_target") > 0
+
+
+def acquisition_plan(cfg, horizon):
+    """Абсолютный план притока по месяцам. Только для режима «объём из плана продаж»."""
+    a = cfg.get("acquisition") or {}
+    s = list(a.get("seasonality") or [1.0] * 12)
+    tot = sum(s) or 1.0
+    target, yoy = g(a, "year1_target"), g(a, "yoy_growth", 1.0)
+    return [target * (yoy ** (m // 12)) * s[m % 12] / tot for m in range(horizon)]
+
+
+def acquisition_shape(cfg, horizon, camp_months):
+    """ДОЛИ притока новых клиентов по месяцам: сколько от общего инкремента приходит когда.
+
+    Равномерный приток `инкремент / месяцы кампании` — удобное, но неверное
+    допущение: план продаж всегда имеет сезонность и темп год-к-году. На NPV это
+    влияет прямо, потому что ранние когорты живут дольше и дисконтируются меньше.
+
+    Три режима, по убыванию точности:
+      1. цель первого года + темп год-к-году + сезонный профиль — план как он есть;
+      2. только сезонный профиль — форма плана без уровня, растянутая на кампанию;
+      3. ничего — равномерно по месяцам кампании (прежнее поведение).
+
+    Доли намеренно НЕ перенормируются к единице, если горизонт короче кампании:
+    часть притока в таком конфиге действительно не попадает в расчёт, и молча
+    дорисовывать её значит прятать ошибку ввода, которую ловит validate().
+    """
+    a = cfg.get("acquisition") or {}
+    seas = a.get("seasonality")
+    if g(a, "year1_target") > 0:
+        plan = acquisition_plan(cfg, horizon)
+        tot = sum(plan) or 1.0
+        return [x / tot for x in plan]
+    if seas:
+        n = min(camp_months, horizon)
+        win = [seas[m % 12] for m in range(n)]
+        tot = sum(win) or 1.0
+        return [win[m] / tot if m < n else 0.0 for m in range(horizon)]
+    return [1.0 / camp_months if m < camp_months else 0.0 for m in range(horizon)]
+
+
+def companion_stream(cfg, active, u):
+    """Продукт-спутник: копилка, накопительный счёт, подписка — своя воронка на той же базе.
+
+    Считается не отдельной инициативой, а надстройкой над активной базой основного
+    продукта: attach → фондирование → баланс → маржа. Часть накопленного возвращается
+    в оборот основного продукта и приносит комиссию ещё раз.
+    """
+    c = cfg.get("companion")
+    if not c:
+        return None
+    attach, funded = g(c, "attach_rate"), g(c, "funded_rate", 1.0)
+    bal0, nim = g(c, "avg_balance"), g(c, "nim_annual")
+    growth, spend_share = g(c, "balance_growth_m"), g(c, "spend_share")
+    fee = split_fee(g(u, "turnover_split", None), g(u, "interchange_rate"))
+    back = bool(c.get("spend_returns_to_turnover"))
+    rows = []
+    for m, act in enumerate(active):
+        holders = act * attach * funded
+        total_bal = holders * bal0 * ((1 + growth) ** m)
+        spend = total_bal * spend_share
+        rows.append({"month": m + 1, "holders": holders, "balance_total": total_bal,
+                     "margin": total_bal * nim / 12.0,
+                     "spend": spend, "spend_fee": spend * fee if back else 0.0})
+    return rows
+
+
+def linked_stream(cfg, active):
+    """Эффект на СВЯЗАННОГО клиента — того, кто сам продукт не берёт.
+
+    Детская карта зарабатывает на родителе: он не уходит, возвращается если ушёл,
+    и покупает больше, потому что банк узнал о нём новое. Три механики считаются
+    порознь, потому что доказываются по-разному и имеют разные грейды:
+
+      удержание   — отток связанного клиента × снижение оттока. Полностью инкрементально:
+                    без инициативы этот человек ушёл бы. Проверяется контрольной группой.
+      привлечение — новые и реактивированные связанные клиенты. Их ОД инкрементален
+                    лишь частично, поэтому режется на attribution_share: часть пришла бы
+                    и без инициативы.
+      кросс-селл  — прирост ОД действующих связанных клиентов от знания о них нового.
+                    Инкрементален по определению, это именно ПРИРОСТ.
+    """
+    l = cfg.get("linked_client")
+    if not l:
+        return None
+    per = g(l, "clients_per_linked", 1.0) or 1.0
+    inc_m = g(l, "income_annual") / 12.0
+    mr = g(l, "margin_rate", 1.0)
+    attr = g(l, "attribution_share", 1.0)
+    src = l.get("sources") or {}
+    share_acq = g(src, "new") + g(src, "reactivated") if src else 1.0
+    churn_m, red = g(l, "churn_annual") / 12.0, g(l, "churn_reduction")
+    xsell = g(l, "cross_sell_uplift")
+    retained, rows = 0.0, []
+    for act in active:
+        linked = act / per
+        retained += linked * churn_m * red          # удержанные накапливаются
+        acq_inc = linked * share_acq * inc_m * attr
+        ret_inc = retained * inc_m
+        xs_inc = linked * inc_m * xsell
+        rows.append({"linked_clients": linked, "retained_cum": retained,
+                     "income_acquisition": acq_inc * mr, "income_retention": ret_inc * mr,
+                     "income_cross_sell": xs_inc * mr,
+                     "total": (acq_inc + ret_inc + xs_inc) * mr})
+    return rows
+
+
+def partner_pl(cfg, active, cohorts, u):
+    """P&L партнёра на той же клиентской базе: свои доли операций и свои ставки.
+
+    Нужен отдельным блоком, а не слитым в общий итог: у партнёра своя экономика,
+    и инициатива, выгодная банку, может быть убыточной для того, без кого она
+    не работает. Это выясняется на переговорах, а не после запуска.
+    """
+    p = cfg.get("partner")
+    if not p:
+        return None
+    turn = g(u, "monthly_turnover")
+    fee = split_fee(p.get("turnover_split"), 0.0)
+    cards = sum(cohorts)
+    txn_rev = sum(a * turn for a in active) * fee
+    card_rev = cards * g(p, "fee_per_card")
+    card_cost = cards * g(p, "cost_per_card")
+    return {"name": p.get("name", "Партнёр"), "cards_issued": round(cards),
+            "turnover_total": round(sum(a * turn for a in active)),
+            "effective_fee": round(fee, 6),
+            "revenue_transactions": round(txn_rev), "revenue_cards": round(card_rev),
+            "costs": round(card_cost), "net": round(txn_rev + card_rev - card_cost)}
 
 
 def poisson_reach(impressions, audience):
@@ -384,6 +902,17 @@ def build_funnel(cfg):
     total_apps = direct_apps + brand_apps
     approved = total_apps * g(f, "approval_rate", 1.0)
     activated = approved * g(f, "activation_rate", 1.0)
+
+    # Объём может задаваться планом продаж, а не медиаворонкой — так устроен вывод
+    # продукта на полку. Тогда план определяет уровень, но медиаворонка НЕ выбрасывается:
+    # разрыв между «сколько даёт медиаплан» и «сколько обещает план» — самый содержательный
+    # вопрос к инициативе, и validate() его задаёт вслух.
+    activated_media = activated
+    plan_total = None
+    if is_plan_driven(cfg):
+        plan_total = sum(acquisition_plan(cfg, int(g(cfg["meta"], "horizon_months", 24))))
+        activated = plan_total
+
     incremental = activated * (1 - g(f, "cannibalization")) * (1 - g(f, "deadweight"))
     return {"channels": ch_out, "target_audience": round(aud),
             "combined_reach_share": round(combined_reach, 4),
@@ -392,17 +921,47 @@ def build_funnel(cfg):
             "avg_frequency": round(total_impr / (combined_reach * aud), 2) if combined_reach * aud > 0 else 0,
             "applications_direct": round(direct_apps), "applications_brand_lift": round(brand_apps),
             "applications_total": round(total_apps), "approved": round(approved),
+            "volume_source": "план продаж" if plan_total is not None else "медиаворонка",
+            "activated_from_media": round(activated_media),
+            "activated_from_plan": round(plan_total) if plan_total is not None else None,
             "activated": round(activated), "cannibalization_loss": round(activated - incremental),
             "incremental_clients": round(incremental),
             "_incremental_raw": incremental, "_activated_raw": activated, "_media_cost": media_cost}
 
 def monthly_margin(u, month_index):
-    """Contribution margin на одного активного клиента в месяц, ₽."""
+    """Contribution margin на одного активного клиента в месяц.
+
+    Комиссионный доход берётся из разложения оборота по типам операций
+    (POS / e-POS / снятие со своими ставками), если оно задано, иначе — из одной
+    усреднённой ставки interchange_rate.
+    """
     ramp = min(1.0, (month_index + 1) / max(g(u, "ramp_months", 1), 1))
     bal, turn = g(u, "avg_balance"), g(u, "monthly_turnover")
-    rev = bal * g(u, "nim_annual") / 12.0 + turn * g(u, "interchange_rate") + g(u, "fee_income_m")
+    fee = split_fee(g(u, "turnover_split", None), g(u, "interchange_rate"))
+    rev = bal * g(u, "nim_annual") / 12.0 + turn * fee + g(u, "fee_income_m")
     cost = turn * g(u, "cashback_rate") + g(u, "servicing_cost_m") + bal * g(u, "cor_annual") / 12.0
     return (rev - cost) * ramp
+
+def market_position(cfg, active):
+    """Какую долю рынка обещает план — первый вопрос, который задаёт комитет.
+
+    Движок способен насчитать три миллиона клиентов на рынке в шесть с половиной
+    миллионов и не сказать ни слова. Доля считается от ДОСТИЖИМОГО рынка, а не от
+    всего: разница обычно четверть и больше, и она всегда в пользу «у нас скромный план».
+    """
+    aud = cfg.get("audience", {})
+    explicit = g(aud, "reachable_market") > 0
+    reach = g(aud, "reachable_market") or g(aud, "target_size")
+    total = g(aud, "market_total")
+    if not reach or not active:
+        return None
+    peak = max(active)
+    return {"reachable_market": round(reach), "market_total": round(total) if total else None,
+            "basis": "достижимый рынок" if explicit else "ЦА (рынок не задан)",
+            "explicit": explicit, "clients_peak": round(peak),
+            "share_of_reachable": round(peak / reach, 4),
+            "share_of_total": round(peak / total, 4) if total else None}
+
 
 def effect_summary(u, rows, r_m, net, npv):
     """Один и тот же прирост клиентов, посчитанный в разных валютах.
@@ -447,10 +1006,24 @@ def run_pl(cfg, funnel):
     acq = g(k, "acq_cost_per_client"); gross = funnel["_activated_raw"]
     acq_total = gross * acq
     value_mode = is_value_mode(cfg); value = g(u, "value_per_client")
+
+    # Форма притока: план продаж с сезонностью и темпом год-к-году, если он задан,
+    # иначе равномерно по месяцам кампании. Уровень всегда берётся из инкремента,
+    # чтобы каннибализация и deadweight не обходились планом стороной.
+    cohorts = [inc * w for w in acquisition_shape(cfg, h, camp_m)]
+
+    # Активная база считается до потоков: и спутник, и связанный клиент живут на ней.
+    active_curve, a = [], 0.0
+    for m in range(h):
+        a = a * (1 - churn) + cohorts[m]
+        active_curve.append(a)
+    comp = companion_stream(cfg, active_curve, u)
+    linked = linked_stream(cfg, active_curve)
+
     rows, cum, cum_disc, payback = [], 0.0, 0.0, None
     for m in range(h):
-        cohort = inc / camp_m if m < camp_m else 0.0
-        active = (rows[-1]["active_clients"] if rows else 0.0) * (1 - churn) + cohort
+        cohort = cohorts[m]
+        active = active_curve[m]
         if value_mode:
             # Ценность уже дисконтирована за свой горизонт ОТ МОМЕНТА привлечения и уже
             # включает отток, ramp и обслуживание. Строить помесячную маржу поверх неё —
@@ -459,6 +1032,13 @@ def run_pl(cfg, funnel):
             gm = cohort * value
         else:
             gm = active * monthly_margin(u, m)
+        # Спутник и связанный клиент — доход СВЕРХ основного продукта, поэтому
+        # добавляются и в режиме ценности тоже: присланная ценность описывает
+        # носителя продукта и про родителя с копилкой ничего не знает.
+        gm_own = gm
+        gm_comp = (comp[m]["margin"] + comp[m]["spend_fee"]) if comp else 0.0
+        gm_linked = linked[m]["total"] if linked else 0.0
+        gm += gm_comp + gm_linked
         cost = ((media + acq_total) / camp_m if m < camp_m else 0.0)
         if m == 0:
             cost += g(k, "production") + g(k, "it_dev") + g(k, "one_off_other")
@@ -475,11 +1055,47 @@ def run_pl(cfg, funnel):
         if not value_mode and payback is None and cum >= 0 and gm_cum > 0:
             payback = m + 1
         rows.append({"month": m + 1, "active_clients": active, "gross_margin": gm,
+                     "margin_own": gm_own, "margin_companion": gm_comp, "margin_linked": gm_linked,
                      "costs": cost, "net": net, "cumulative": cum, "cumulative_discounted": cum_disc})
     total_gm = sum(r["gross_margin"] for r in rows); total_cost = sum(r["costs"] for r in rows)
     mkt_cost = media + g(k, "production") + acq_total
     effect = effect_summary(u, rows, r_m, total_gm - total_cost, cum_disc)
+
+    # Из чего сложилась маржа. Без этой разбивки нельзя увидеть главное свойство
+    # таких инициатив: продукт может почти ничего не зарабатывать сам и при этом
+    # окупаться связанным клиентом — а значит и управлять надо связанным клиентом.
+    src = {"own_product": round(sum(r["margin_own"] for r in rows)),
+           "companion": round(sum(r["margin_companion"] for r in rows)),
+           "linked_client": round(sum(r["margin_linked"] for r in rows))}
+    # Доли считаются только когда все слагаемые одного знака. Если один источник
+    # в минусе, «доля в марже» перестаёт что-либо значить: получаются 3454% у одного
+    # и −2134% у другого. Вместо бессмысленного процента отдаём пустое и причину.
+    parts = [src["own_product"], src["companion"], src["linked_client"]]
+    src["shares"] = ({kk: round(vv / total_gm, 4) for kk, vv in src.items()}
+                     if total_gm > 0 and all(v >= 0 for v in parts) else None)
+    if src["shares"] is None:
+        src["shares_note"] = ("Доли не считаются: источники маржи разного знака "
+                              "или суммарная маржа не положительна. Смотрите абсолютные суммы.")
+    linked_detail = None
+    if linked:
+        linked_detail = {
+            "linked_clients_peak": round(max(x["linked_clients"] for x in linked)),
+            "retained_cum_end": round(linked[-1]["retained_cum"]),
+            "income_acquisition": round(sum(x["income_acquisition"] for x in linked)),
+            "income_retention": round(sum(x["income_retention"] for x in linked)),
+            "income_cross_sell": round(sum(x["income_cross_sell"] for x in linked))}
+    companion_detail = None
+    if comp:
+        companion_detail = {
+            "name": (cfg.get("companion") or {}).get("name", "Спутник"),
+            "holders_peak": round(max(x["holders"] for x in comp)),
+            "balance_peak": round(max(x["balance_total"] for x in comp)),
+            "margin_total": round(sum(x["margin"] for x in comp)),
+            "spend_fee_total": round(sum(x["spend_fee"] for x in comp))}
     return {"horizon_months": h, "effect": effect,
+            "market": market_position(cfg, active_curve),
+            "margin_sources": src, "linked": linked_detail, "companion": companion_detail,
+            "partner": partner_pl(cfg, active_curve, cohorts, u),
             "mode": MODE_VALUE if value_mode else MODE_BUILD_UP,
             "value_per_client": round(value) if value_mode else None,
             "gross_clients_paid": round(gross),
@@ -601,9 +1217,130 @@ def frk_ladder(cfg):
     return {"levels": out, "optimal_tier": best["frk_tier"],
             "note": f"Максимальный NPV даёт ФРК {best['frk_tier']}. Шаги с отрицательным marginal_npv не окупаются."}
 
+def validate_brief(cfg):
+    """Что человек сказал, а модель не посчитала.
+
+    Самый дорогой класс ошибок в этом инструменте — не завышенный NPV, а тихая потеря
+    вводных. Человек рассказал про пилот, партнёров и географию, модель молча посчитала
+    без них и выдала уверенный ответ. Неверную цифру видно, а эту нет. Поэтому всё,
+    что не стало параметром, печатается — списком, дословно, с причиной.
+    """
+    b = brief_coverage(cfg)
+    if not b:
+        return ["БРИФ НЕ РАЗОБРАН: описание инициативы не разложено на утверждения. "
+                "Всё, что человек сказал словами — про пилот, партнёров, географию, "
+                "механику, — в расчёт не попало. Заполните раздел brief: каждое "
+                "утверждение получает статус applied / question / ignored."]
+    out = []
+    if b["questions"]:
+        lines = "; ".join(f"«{q['claim']}» → {q['implication'] or 'нужен ответ'}"
+                          for q in b["open_questions"])
+        out.append(f"БРИФ, ОТКРЫТЫЕ ВОПРОСЫ ({b['questions']}): {lines}. "
+                   "Пока на них нет ответа, соответствующие параметры взяты дефолтом — "
+                   "то есть догадкой, а не тем, что человек имел в виду.")
+    if b["ignored"]:
+        lines = "; ".join(f"«{q['claim']}» — {q['reason']}" for q in b["not_counted"])
+        out.append(f"БРИФ, НЕ УЧТЕНО В РАСЧЁТЕ ({b['ignored']}): {lines}. "
+                   "Это сознательное решение, а не забывчивость, но в отчёт оно "
+                   "обязано попасть: читатель должен знать, чего в цифре нет.")
+    if b["coverage"] is not None and b["coverage"] < 0.5:
+        out.append(f"БРИФ РАЗОБРАН НАПОЛОВИНУ: параметрами стали {b['applied']} "
+                   f"утверждений из {b['total']} ({b['coverage']:.0%}). Модель считает "
+                   "не ту инициативу, которую описал человек, а её обеднённую версию.")
+    return out
+
+
+def validate_extensions(cfg, f, pl):
+    """Проверки новых блоков: план, рынок, связанный клиент, спутник, партнёр."""
+    out = list(validate_brief(cfg))
+    # План продаж против медиаплана. Обычно между ними пропасть, и она либо
+    # означает переоценённый план, либо недофинансированный маркетинг.
+    if f.get("activated_from_plan") is not None:
+        plan, media = f["activated_from_plan"], f["activated_from_media"]
+        out.append(f"ОБЪЁМ ИЗ ПЛАНА: считаем по плану продаж ({nf(plan)} клиентов), "
+                   f"а не по медиаворонке.")
+        if plan > media * 1.2:
+            gap = plan - media
+            out.append(
+                f"РАЗРЫВ ПЛАНА И МЕДИА: медиаплан даёт {nf(media)} активаций, план обещает "
+                f"{nf(plan)}. Откуда берутся ещё {nf(gap)} ({gap / max(plan, 1):.0%})? Если из "
+                "органики и полки — так и записать отдельной строкой; если ниоткуда — "
+                "план не обеспечен, и это надо решить до запуска, а не в декабре."
+                )
+        elif media > plan * 1.5 and media > 0:
+            out.append(f"ВНИМАНИЕ: медиаплан даёт {nf(media)} активаций — заметно больше плана "
+                       f"продаж ({nf(plan)}). Либо план занижен, либо бюджет избыточен: "
+                       "в расчёт идёт план, лишний медиабюджет просто списывается в затраты."
+                       )
+    mk = pl.get("market")
+    if mk and mk["explicit"]:
+        sh = mk["share_of_reachable"]
+        if sh >= 0.4:
+            out.append(f"ДОЛЯ РЫНКА: план выводит на {sh:.0%} достижимого рынка "
+                       f"({nf(mk['clients_peak'])} из {nf(mk['reachable_market'])}). Это уже не план "
+                       "привлечения, а заявка на лидерство в сегменте — она требует отдельного "
+                       "обоснования: чем именно вы заберёте эту долю у тех, кто её сейчас держит."
+                       )
+        elif sh >= 0.2:
+            out.append(f"ДОЛЯ РЫНКА: план выводит на {sh:.0%} достижимого рынка — высоко, "
+                       "но достижимо. Сверьтесь с фактической динамикой доли за прошлые запуски."
+                       )
+        if mk.get("share_of_total") and mk["share_of_total"] != sh:
+            out.append(f"ДОЛЯ СЧИТАЕТСЯ ОТ ДОСТИЖИМОГО РЫНКА: {sh:.1%} от "
+                       f"{nf(mk['reachable_market'])}, а не {mk['share_of_total']:.1%} от всего "
+                       f"рынка {nf(mk['market_total'])}. Вторая цифра красивее и не значит ничего: "
+                       "недостижимая часть рынка не купит продукт ни при каком бюджете."
+                       )
+
+    lc = cfg.get("linked_client")
+    if lc:
+        if g(lc, "margin_rate", 1.0) >= 1.0:
+            out.append("ОД ≠ МАРЖА: у связанного клиента margin_rate не задан, значит его "
+                       "операционный доход целиком засчитан как маржа. ОД не вычитает "
+                       "стоимость фондирования, обслуживание и риск — эффект завышен. "
+                       "Задайте margin_rate долей маржи в ОД.")
+        if g(lc, "attribution_share", 1.0) >= 1.0 and (lc.get("sources") or {}).get("new"):
+            out.append("АТРИБУЦИЯ 100%: весь ОД новых связанных клиентов приписан инициативе. "
+                       "Часть из них пришла бы и без неё — задайте attribution_share.")
+        if not lc.get("sources"):
+            out.append("ИСТОЧНИКИ НЕ ЗАДАНЫ: связанные клиенты целиком считаются новыми. "
+                       "Если часть из них уже клиенты банка, их ОД инициатива себе приписала.")
+        sh = (pl["margin_sources"].get("shares") or {}).get("linked_client")
+        if sh and sh > 0.6:
+            out.append(f"ЭФФЕКТ ДЕРЖИТСЯ НА СВЯЗАННОМ КЛИЕНТЕ: {sh:.0%} маржи приходит "
+                       "не с носителя продукта. Это не ошибка — так устроены детские и "
+                       "семейные продукты, — но управлять надо именно этим эффектом, "
+                       "и замерять его нужно контрольной группой по СВЯЗАННЫМ клиентам.")
+    # Продукт не окупает сам себя и живёт за счёт пристроек. Вывод не «плохо»,
+    # а «вы запускаете не то, чем думаете»: цели, KPI и владелец продукта должны
+    # быть про связанного клиента, иначе команда будет оптимизировать не ту метрику.
+    ms = pl.get("margin_sources") or {}
+    if ms.get("own_product", 0) < 0 and (ms.get("linked_client", 0) or ms.get("companion", 0)):
+        rescue = ms.get("companion", 0) + ms.get("linked_client", 0)
+        out.append(
+            f"ПРОДУКТ САМ ПО СЕБЕ УБЫТОЧЕН: носитель даёт {nf(ms['own_product'])} за горизонт, "
+            f"а спутник и связанный клиент — {nf(rescue)}. Инициатива держится не на том "
+            "продукте, который выводится. Проверьте: если эффект на связанного клиента "
+            "не подтвердится замером, остаётся чистый убыток."
+            )
+    comp = cfg.get("companion")
+    if comp and comp.get("spend_returns_to_turnover"):
+        out.append(f"ПРОВЕРЬТЕ ДВОЙНОЙ СЧЁТ: траты из «{comp.get('name', 'спутника')}» приносят "
+                   "комиссию повторно. Это верно, только если спутник пополняется извне "
+                   "(подарки, переводы родных). Если он пополняется с основной карты, "
+                   "тот же оборот посчитан дважды — снимите флаг.")
+    pt = pl.get("partner")
+    if pt and pt["net"] < 0:
+        out.append(f"ПАРТНЁР В МИНУСЕ: «{pt['name']}» получает {nf(pt['net'])} за горизонт. "
+                   "Инициатива, убыточная для того, без кого она не работает, не запускается — "
+                   "это выясняется на переговорах, а не после.")
+    return out
+
+
 def validate(cfg, f, pl):
     """Проверки ВВОДНЫХ: ловят случаи, где модель считает без ошибок, но молча теряет часть эффекта."""
-    out = list(cfg.get("_segments", {}).get("notes", []))
+    out = list(cfg.get("_segments", {}).get("notes", [])) + list(cfg.get("_notes", []))
+    out += validate_extensions(cfg, f, pl)
     h = int(g(cfg["meta"], "horizon_months", 24)); cm = int(max(g(cfg["costs"], "campaign_months", 1), 1))
     if h < cm:
         out.append(f"ОШИБКА ВВОДА: горизонт {h} мес короче кампании {cm} мес. "
@@ -611,11 +1348,12 @@ def validate(cfg, f, pl):
                    "Поставьте горизонт не меньше длительности кампании.")
     # Пустой медиаплан: считать нечего, но модель раньше молча возвращала нули и вердикт
     # «NO-GO — базовый сценарий не окупается», как будто это оценка инициативы.
-    if not cfg.get("channels"):
+    if not cfg.get("channels") and not is_plan_driven(cfg):
         out.append("ОШИБКА ВВОДА: в плане нет ни одного канала. Показов, охвата и заявок "
                    "не будет, инкремент равен нулю — считать нечего. Это не оценка "
-                   "инициативы, а пустой прогон: добавьте каналы на шаге «Допущения».")
-    elif f["incremental_clients"] <= 0 and f["applications_total"] <= 0:
+                   "инициативы, а пустой прогон: добавьте каналы на шаге «Допущения» "
+                   "или задайте объём планом продаж (раздел acquisition).")
+    elif cfg.get("channels") and f["incremental_clients"] <= 0 and f["applications_total"] <= 0:
         out.append("ОШИБКА ВВОДА: каналы заданы, но заявок ноль. Проверьте бюджет, CPM "
                    "и конверсии: при нулевой конверсии или нулевом бюджете воронка пустая, "
                    "а результат выглядит как посчитанный.")
@@ -630,10 +1368,10 @@ def validate(cfg, f, pl):
         u = cfg["unit_economics"]
         vh = int(g(u, "value_horizon_months", h))
         out.append(f"РЕЖИМ: экономика задана готовой ценностью клиента "
-                   f"({round(g(u, 'value_per_client')):,} ₽ за {vh} мес, дисконтированной). "
+                   f"({nf(round(g(u, 'value_per_client')))} ₽ за {vh} мес, дисконтированной). "
                    "Срок окупаемости в этом режиме НЕ считается: момент возврата денег "
                    "из одного числа не выводится. Нужна окупаемость — задавайте юнит-экономику "
-                   "снизу вверх (mode = build_up).".replace(",", " "))
+                   "снизу вверх (mode = build_up).")
         if g(u, "value_per_client") <= 0:
             out.append("ОШИБКА ВВОДА: режим ценности клиента включён, но сама ценность = 0. "
                        "Вся валовая маржа обнулится, останутся одни затраты.")
@@ -679,7 +1417,7 @@ def validate(cfg, f, pl):
             need = {"internal": "«Охват базы» и response rate",
                     "perform": "CPM и CTR", "brand": "CPM и brand uplift"}[c["kind"]]
             out.append(f"БЮДЖЕТ ВПУСТУЮ: канал «{c['name']}» типа {c['kind']} тратит "
-                       f"{c['budget']:,} ₽ и не даёт ни одной заявки и ни капли brand-эффекта. "
+                       f"{nf(c['budget'])} ₽ и не даёт ни одной заявки и ни капли brand-эффекта. "
                        f"Для типа {c['kind']} нужны {need} — проверьте тип канала и конверсии.")
         if c["kind"] == "brand" and c["reach_share"] >= 0.97 and c["freq"] >= 4.5:
             out.append(f"НАСЫЩЕНИЕ: канал «{c['name']}» упёрся в потолок — охват {c['reach_share']:.0%}, "
@@ -707,10 +1445,10 @@ def flags(cfg, f, pl):
         out.append("Окупаемости на заданном горизонте нет.")
     if pl.get("acquisition_payout_total"):
         over = pl["gross_clients_paid"] - f["incremental_clients"]
-        out.append(f"Выплаты идут за {pl['gross_clients_paid']:,} сработавших клиентов, а инкремент — "
-                   f"только {f['incremental_clients']:,}. За {over:,} клиентов ({over/max(pl['gross_clients_paid'],1):.0%}) "
+        out.append(f"Выплаты идут за {nf(pl['gross_clients_paid'])} сработавших клиентов, а инкремент — "
+                   f"только {nf(f['incremental_clients'])}. За {nf(over)} клиентов ({over/max(pl['gross_clients_paid'],1):.0%}) "
                    f"вы платите, ничего не получая: они пришли бы и без стимула или переехали со своих же продуктов. "
-                   f"Фактическая выплата на одного ИНКРЕМЕНТАЛЬНОГО клиента — {pl['payout_per_incremental_client']:,} ₽.")
+                   f"Фактическая выплата на одного ИНКРЕМЕНТАЛЬНОГО клиента — {nf(pl['payout_per_incremental_client'])} ₽.")
     # правила предметной области: оба флага есть на листе «Итог», в движке их не было.
     # В режиме ценности стоимость риска уже внутри присланного числа — флаг был бы ложным.
     if (not is_value_mode(cfg) and g(cfg["unit_economics"], "cor_annual") <= 0
@@ -721,7 +1459,14 @@ def flags(cfg, f, pl):
         out.append("Каннибализация = 0. В банке новый продукт почти всегда ест старый — обоснуйте ноль.")
     return out
 
-GRADE_W = {"A": 1.0, "B": 0.75, "C": 0.5, "D": 0.2}
+# B_minus — параметр, перенесённый с другого рынка или другой юрисдикции.
+# Это не свой факт (грейд A) и не свой аналог (грейд B): рынок другой, доходы другие,
+# проникновение продуктов другое. Но и не рыночный бенчмарк (C): цифра из валидированной
+# модели, просто не той страны. Отдельный вес нужен, потому что при выводе продукта
+# на новый рынок такими оказываются почти все параметры экономики сразу.
+GRADE_W = {"A": 1.0, "B": 0.75, "B_minus": 0.6, "C": 0.5, "D": 0.2}
+GRADE_LABEL = {"A": "свой факт", "B": "свой аналог", "B_minus": "перенос с другого рынка",
+               "C": "рыночный бенчмарк", "D": "догадка"}
 
 def confidence_index(cfg):
     c = cfg.get("confidence")
@@ -732,10 +1477,43 @@ def confidence_index(cfg):
         return None
     idx = sum(c.get(k, 0) * w for k, w in GRADE_W.items()) / tot
     tier = "Высокая" if idx >= 0.8 else "Средняя" if idx >= 0.6 else "Низкая" if idx >= 0.4 else "Очень низкая"
-    return {"counts": c, "index": round(idx, 2), "tier": tier,
-            "share_guesswork": round(c.get("D", 0) / tot, 2),
-            "note": "Можно принимать инвестиционное решение." if idx >= 0.6
-                    else "Решение о полном запуске принимать рано — сначала пилот или добор данных."}
+    out = {"counts": c, "index": round(idx, 2), "tier": tier,
+           "share_guesswork": round(c.get("D", 0) / tot, 2),
+           "note": "Можно принимать инвестиционное решение." if idx >= 0.6
+                   else "Решение о полном запуске принимать рано — сначала пилот или добор данных."}
+    transfer = c.get("B_minus", 0)
+    if transfer:
+        out["transferred_params"] = transfer
+        out["transfer_note"] = (
+            f"{transfer} из {tot} допущений перенесены с другого рынка. На запуске "
+            "в новой стране это самый недооценённый риск: параметры юнит-экономики "
+            "выглядят обоснованными, потому что взяты из работающей модели, — "
+            "но работающей на другом населении и другом уровне доходов. "
+            "Проверять локальными данными в первую очередь их, а не догадки.")
+    return out
+
+def currency_block(cfg, pl):
+    """Ключевые суммы во второй валюте.
+
+    Проект в другой стране считается в местной валюте — иначе каждое допущение
+    приходится мысленно конвертировать, и там же появляются ошибки на порядок.
+    А решение принимает комитет, который меряет в рублях. Нужны обе, из одного прогона.
+    """
+    m = cfg.get("meta", {})
+    cur = m.get("currency") or "RUB"
+    rate = g(m, "fx_to_rub")
+    out = {"currency": cur}
+    if cur == "RUB" or rate <= 0:
+        return out
+    out["fx_to_rub"] = rate
+    out["in_rub"] = {k: round(pl[k] / rate) for k in
+                     ("npv", "net_effect", "total_gross_margin", "total_costs", "marketing_cost")}
+    if pl.get("incremental_cpa") is not None:
+        out["in_rub"]["incremental_cpa"] = round(pl["incremental_cpa"] / rate)
+    if pl.get("ltv_per_client") is not None:
+        out["in_rub"]["ltv_per_client"] = round(pl["ltv_per_client"] / rate)
+    return out
+
 
 def analyze(cfg):
     """Полный результат по уже проверенному и сведённому конфигу.
@@ -745,7 +1523,9 @@ def analyze(cfg):
     """
     funnel, pl = evaluate(cfg)
     view = {k: v for k, v in funnel.items() if not k.startswith("_")}
-    res = {"meta": cfg.get("meta", {}), "segments": cfg.get("_segments"), "funnel": view,
+    res = {"meta": cfg.get("meta", {}), "currency": currency_block(cfg, pl),
+           "brief": brief_coverage(cfg), "pilot": cfg.get("_pilot"),
+           "segments": cfg.get("_segments"), "funnel": view,
            "pl": {k: v for k, v in pl.items() if k != "monthly"}, "monthly": pl["monthly"],
            "scenarios": {}, "tornado": tornado(cfg, pl["npv"]),
            "rice": rice_score(cfg, funnel["_incremental_raw"], pl["npv"]),

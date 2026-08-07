@@ -47,8 +47,8 @@ ENGINE_VERSION = hashlib.sha256((ROOT / "src" / "calc.py").read_bytes()).hexdige
 INITIATIVE_TYPES = params.TYPE_CHOICES
 PRODUCTS = params.PRODUCTS
 PRODUCT_NAME = params.PRODUCT_NAME
-STEPS = [("segments", "Сегменты"), ("panel", "Панель"), ("assumptions", "Допущения"),
-         ("result", "Результат")]
+STEPS = [("brief", "Бриф"), ("segments", "Сегменты"), ("panel", "Панель"),
+         ("assumptions", "Допущения"), ("result", "Результат")]
 
 app = FastAPI(title="Калькулятор эффекта инициатив")
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
@@ -305,7 +305,11 @@ async def new_save(request: Request):
         con, author_of(request), name, f.get("type") or "frk4", product,
         (f.get("description") or "").strip(),
         apply_product_economics(params.defaults(), product))
-    return RedirectResponse(f"/initiative/{iid}/segments", status_code=303)
+    # Первым делом бриф: описание раскладывается на утверждения ДО всех вопросов.
+    # Если отправить человека сразу на сегменты, описание так и останется текстом,
+    # который никто не превратил в параметры, — ровно та тихая потеря вводных,
+    # ради которой шаг и заведён.
+    return RedirectResponse(f"/initiative/{iid}/brief", status_code=303)
 
 
 @app.get("/initiative/{iid}/edit", response_class=HTMLResponse)
@@ -341,6 +345,67 @@ def delete(iid: int):
 
 
 # ------------------------------------------------------------------ шаг 2: сегменты
+CLAIM_FIELDS = ("claim", "implication", "maps_to", "grade", "status", "reason")
+
+
+def form_to_brief(form, cfg, description):
+    """Строки таблицы утверждений → раздел `brief` конфига.
+
+    Пустые строки (без текста утверждения) выбрасываются: человек добавляет их
+    заранее, а заполняет не все. Пустые поля не пишутся вовсе, чтобы конфиг
+    не зарастал `null`-ами, которые движок потом обязан отличать от нуля.
+    """
+    claims, i = [], 0
+    while any(k.startswith(f"claim.{i}.") for k in form.keys()):
+        text = (form.get(f"claim.{i}.claim") or "").strip()
+        if text:
+            c = {}
+            for key in CLAIM_FIELDS:
+                v = (form.get(f"claim.{i}.{key}") or "").strip()
+                if v:
+                    c[key] = v
+            claims.append(c)
+        i += 1
+    if claims or description:
+        cfg["brief"] = {"description": description, "claims": claims}
+    else:
+        cfg.pop("brief", None)
+    return cfg
+
+
+@app.get("/initiative/{iid}/brief", response_class=HTMLResponse)
+def brief_form(request: Request, iid: int, error: str = ""):
+    init = db.get_initiative(con, iid)
+    cfg = config_of(init)
+    brief = cfg.get("brief") or {}
+    return page(request, "brief.html", init=init, step="brief", error=error,
+                claims=brief.get("claims") or [],
+                coverage=calc.brief_coverage(cfg),
+                statuses=calc.CLAIM_STATUS, grades=list(calc.GRADE_W))
+
+
+@app.post("/initiative/{iid}/brief")
+async def brief_save(request: Request, iid: int):
+    f = await request.form()
+    init = db.get_initiative(con, iid)
+    cfg = form_to_brief(f, config_of(init), (init["description"] or "").strip())
+    # Проверку состава утверждений делает ДВИЖОК, а не форма: правило «applied обязан
+    # указать maps_to, ignored обязан назвать причину» живёт в одном месте, иначе веб
+    # и навык начнут принимать разные брифы. Приложение только показывает текст ошибки.
+    try:
+        calc.validate_config(cfg)
+    except calc.ConfigError as e:
+        only_brief = [ln for ln in str(e).splitlines() if "brief" in ln]
+        db.update_initiative(con, iid, config=cfg)      # ввод не теряем
+        return RedirectResponse(
+            f"/initiative/{iid}/brief?error=" + quote("\n".join(only_brief) or str(e)),
+            status_code=303)
+    db.update_initiative(con, iid, config=cfg)
+    if f.get("action") == "save":
+        return RedirectResponse(f"/initiative/{iid}/brief", status_code=303)
+    return RedirectResponse(f"/initiative/{iid}/segments", status_code=303)
+
+
 @app.get("/initiative/{iid}/segments", response_class=HTMLResponse)
 def segments_form(request: Request, iid: int):
     init = db.get_initiative(con, iid)
