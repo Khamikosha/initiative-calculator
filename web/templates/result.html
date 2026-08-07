@@ -2,6 +2,7 @@
 {% set v = res.verdict %}
 {% set pl = res.pl %}
 {% set f = res.funnel %}
+{% set CUR = (res.currency.currency if res.currency else "RUB") | replace("RUB", "₽") %}
 {% block body %}
 
 <div class="row-between">
@@ -21,9 +22,9 @@
 
 <div class="tiles">
   <div class="tile"><span>Инкрементальные клиенты</span><b>{{ f.incremental_clients | num }}</b></div>
-  <div class="tile"><span>NPV</span><b class="{{ 'neg' if pl.npv < 0 }}">{{ pl.npv | mln }}</b></div>
+  <div class="tile"><span>NPV</span><b class="{{ 'neg' if pl.npv < 0 }}">{{ pl.npv | mln(CUR) }}</b></div>
   <div class="tile"><span>ROMI</span><b>{{ pl.romi if pl.romi is not none else "—" }}</b></div>
-  <div class="tile"><span>Инкрементальный CPA</span><b>{{ pl.incremental_cpa | money }}</b></div>
+  <div class="tile"><span>Инкрементальный CPA</span><b>{{ pl.incremental_cpa | money(CUR) }}</b></div>
   <div class="tile"><span>Окупаемость</span>
     <b>{{ (pl.payback_months ~ " мес") if pl.payback_months else "нет" }}</b></div>
   <div class="tile"><span>LTV / CAC</span><b>{{ pl.ltv_to_cac if pl.ltv_to_cac is not none else "—" }}</b></div>
@@ -41,11 +42,11 @@
       <tr><td>Инкрементальные клиенты</td>
         {% for n in names %}<td class="r">{{ res.scenarios[n].incremental_clients | num }}</td>{% endfor %}</tr>
       <tr><td>NPV</td>
-        {% for n in names %}<td class="r {{ 'neg' if res.scenarios[n].npv < 0 }}">{{ res.scenarios[n].npv | mln }}</td>{% endfor %}</tr>
+        {% for n in names %}<td class="r {{ 'neg' if res.scenarios[n].npv < 0 }}">{{ res.scenarios[n].npv | mln(CUR) }}</td>{% endfor %}</tr>
       <tr><td>ROMI</td>
         {% for n in names %}<td class="r">{{ res.scenarios[n].romi if res.scenarios[n].romi is not none else "—" }}</td>{% endfor %}</tr>
       <tr><td>Инкрементальный CPA</td>
-        {% for n in names %}<td class="r">{{ res.scenarios[n].incremental_cpa | money }}</td>{% endfor %}</tr>
+        {% for n in names %}<td class="r">{{ res.scenarios[n].incremental_cpa | money(CUR) }}</td>{% endfor %}</tr>
       <tr><td>Окупаемость, мес</td>
         {% for n in names %}<td class="r">{{ res.scenarios[n].payback_months or "нет" }}</td>{% endfor %}</tr>
     </tbody>
@@ -83,9 +84,9 @@
 
     <div><span>ОД за горизонт</span>
       {% if e.od_total is not none %}
-        <b>{{ e.od_total | mln }}</b>
-        <small>{{ e.od_annual_per_client | money }} на клиента в год ·
-          дисконтированный {{ e.od_discounted | mln }}</small>
+        <b>{{ e.od_total | mln(CUR) }}</b>
+        <small>{{ e.od_annual_per_client | money(CUR) }} на клиента в год ·
+          дисконтированный {{ e.od_discounted | mln(CUR) }}</small>
       {% else %}
         <b class="muted">нет данных</b>
         <small>операционный доход на клиента не задан — см. «Проверку вводных»</small>
@@ -94,18 +95,194 @@
 
     <div><span>AUM / доп. объём средств</span>
       {% if e.aum_peak is not none %}
-        <b>{{ e.aum_peak | mln }}</b>
-        <small>{{ e.funds_per_client | money }} на клиента · на конец {{ e.aum_end | mln }}</small>
+        <b>{{ e.aum_peak | mln(CUR) }}</b>
+        <small>{{ e.funds_per_client | money(CUR) }} на клиента · на конец {{ e.aum_end | mln(CUR) }}</small>
       {% else %}
         <b class="muted">нет данных</b><small>не задан средний баланс</small>
       {% endif %}
     </div>
 
-    <div class="last"><span>PL — чистый эффект</span><b>{{ e.pl_npv | mln }}</b>
-         <small>недисконтированный {{ e.pl_net | mln }}</small></div>
+    <div class="last"><span>PL — чистый эффект</span><b>{{ e.pl_npv | mln(CUR) }}</b>
+         <small>недисконтированный {{ e.pl_net | mln(CUR) }}</small></div>
   </div>
   <small class="muted">ОД — это <b>доход</b>, а не маржа: кэшбэк, обслуживание и риск он
   не вычитает. Сравнивать его с NPV напрямую нельзя, нужны обе цифры.</small>
+</section>
+{% endif %}
+
+{% set ms = pl.margin_sources %}
+{% if ms and (ms.companion or ms.linked_client or ms.base_activation) %}
+<section class="card">
+  <h3>Откуда маржа</h3>
+  <p class="muted">Носитель продукта и источник денег — часто разные вещи. Если больше
+  половины приходит не с самого продукта, управлять надо тем, что приносит.</p>
+  <table class="grid">
+    <tr><th>Источник</th><th class="r">Сумма</th><th class="r">Доля</th></tr>
+    {% for key, label in [("own_product", "Сам продукт"),
+                          ("companion", "Продукт-спутник"),
+                          ("linked_client", "Связанный клиент"),
+                          ("base_activation", "Растранзачивание базы")] %}
+      {% if ms[key] %}
+      <tr><td>{{ label }}</td><td class="r">{{ ms[key] | mln(CUR) }}</td>
+          <td class="r">{% if ms.shares %}{{ ms.shares[key] | pct(0) }}{% else %}—{% endif %}</td></tr>
+      {% endif %}
+    {% endfor %}
+  </table>
+  {% if not ms.shares %}<small class="muted">{{ ms.shares_note }}</small>{% endif %}
+  {% if ms.own_product < 0 %}
+  <p class="callout bad">Носитель продукта убыточен: инициатива держится не на том
+  продукте, который выводится. Если эффект на базе не подтвердится замером,
+  остаётся чистый убыток.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if pl.linked %}
+{% set lk = pl.linked %}
+<section class="card">
+  <h3>Связанный клиент</h3>
+  <p class="muted">Три механики считаются порознь: они доказываются по-разному,
+  и усреднять их в один «uplift» нельзя.</p>
+  <table class="grid">
+    <tr><th>Механика</th><th class="r">Эффект</th><th>Чем доказывается</th></tr>
+    <tr><td>Удержание</td><td class="r">{{ lk.income_retention | mln(CUR) }}</td>
+        <td>контрольная группа по связанным</td></tr>
+    <tr><td>Привлечение</td><td class="r">{{ lk.income_acquisition | mln(CUR) }}</td>
+        <td>сплит-тест или geo-holdout</td></tr>
+    <tr><td>Кросс-селл</td><td class="r">{{ lk.income_cross_sell | mln(CUR) }}</td>
+        <td>до/после на когорте</td></tr>
+  </table>
+  <small class="muted">Связанных клиентов на пике {{ lk.linked_clients_peak | num }},
+  удержано накопленно {{ lk.retained_cum_end | num }}. Удержание откладывает уход,
+  а не отменяет: спасённый оттекает по обычной ставке.</small>
+</section>
+{% endif %}
+
+{% if pl.base_activation %}
+{% set ba = pl.base_activation %}
+<section class="card">
+  <h3>{{ ba.name }}</h3>
+  <p class="muted">Тот же клиент того же продукта, другое поведение. Единица эффекта —
+  прирост оборота и остатка, а не клиент.</p>
+  <div class="funnel">
+    <div><span>Сменили поведение</span><b>{{ ba.activated_clients | num }}</b>
+         <small>на пике активно {{ ba.peak_active_uplifted | num }},
+         на конец {{ ba.end_active_uplifted | num }}</small></div>
+    <div><span>Прирост на клиента</span><b>{{ ba.turnover_delta_per_client | money(CUR) }}/мес</b>
+         <small>остаток +{{ ba.balance_delta_per_client | money(CUR) }}</small></div>
+    <div class="last"><span>Маржа</span><b>{{ ba.margin_total | mln(CUR) }}</b>
+         <small>{{ ba.margin_per_client_m }} ₽/мес с одного проснувшегося</small></div>
+  </div>
+  <small class="muted">Растранзаченные <b>не идут ни в АКБ, ни в инкремент</b> — они уже
+  в базе. Иначе один человек посчитался бы дважды, как новый и как проснувшийся.</small>
+</section>
+{% endif %}
+
+{% if pl.companion %}
+{% set cp = pl.companion %}
+<section class="card">
+  <h3>Продукт-спутник: {{ cp.name }}</h3>
+  <div class="funnel">
+    <div><span>Держателей на пике</span><b>{{ cp.holders_peak | num }}</b></div>
+    <div><span>Баланс на пике</span><b>{{ cp.balance_peak | mln(CUR) }}</b></div>
+    <div class="last"><span>Маржа</span><b>{{ cp.margin_total | mln(CUR) }}</b>
+         <small>{% if cp.spend_fee_total %}плюс комиссия с трат
+         {{ cp.spend_fee_total | mln(CUR) }}{% else %}траты в оборот не возвращаются{% endif %}</small></div>
+  </div>
+</section>
+{% endif %}
+
+{% if pl.partner %}
+{% set pt = pl.partner %}
+<section class="card">
+  <h3>Эффект для партнёра: {{ pt.name }}</h3>
+  <table class="grid">
+    <tr><td>Выпущено карт</td><td class="r">{{ pt.cards_issued | num }}</td></tr>
+    <tr><td>Доход с транзакций</td><td class="r">{{ pt.revenue_transactions | mln(CUR) }}</td></tr>
+    <tr><td>Доход за выпуск</td><td class="r">{{ pt.revenue_cards | mln(CUR) }}</td></tr>
+    <tr><td><b>Итог партнёра</b></td><td class="r"><b>{{ pt.net | mln(CUR) }}</b></td></tr>
+  </table>
+  {% if pt.net < 0 %}
+  <p class="callout bad">Партнёр в минусе. Инициатива, убыточная для того, без кого она
+  не работает, не запускается — это выясняется на переговорах, а не после.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if pl.market and pl.market.explicit %}
+{% set mk = pl.market %}
+<section class="card">
+  <h3>Позиция на рынке</h3>
+  <p>Клиентов на пике {{ mk.clients_peak | num }} —
+  <b>{{ mk.share_of_reachable | pct }} достижимого рынка</b> ({{ mk.reachable_market | num }} чел).
+  {% if mk.share_of_total %}От всего рынка {{ mk.market_total | num }} — это
+  {{ mk.share_of_total | pct }}, но вторая цифра ничего не значит: недостижимая часть
+  не купит продукт ни при каком бюджете.{% endif %}</p>
+</section>
+{% endif %}
+
+{% if res.brief and res.brief.total %}
+{% set br = res.brief %}
+<section class="card">
+  <h3>Чего в этой цифре нет</h3>
+  <p class="muted">Разобрано {{ br.applied }} из {{ br.total }} утверждений описания
+  ({{ br.coverage | pct(0) }}).</p>
+  {% if br.open_questions %}
+  <p><b>Открытые вопросы ({{ br.questions }}):</b></p>
+  <ul>{% for q in br.open_questions %}
+    <li>«{{ q.claim }}» → {{ q.implication or "нужен ответ" }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if br.not_counted %}
+  <p><b>Не учтено сознательно ({{ br.ignored }}):</b></p>
+  <ul>{% for q in br.not_counted %}
+    <li>«{{ q.claim }}» — {{ q.reason }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if not br.open_questions and not br.not_counted %}
+  <p>Все утверждения описания стали параметрами модели.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if res.pilot %}
+{% set pi = res.pilot %}
+<section class="card">
+  <h3>Что дал пилот: {{ pi.name }}</h3>
+  <table class="grid">
+    <tr><td>Грейд переноса</td><td><b>{{ pi.grade | replace("_minus", "−") }}</b>
+        {% if not pi.same_geography %}— география раскатки шире пилотной{% endif %}</td></tr>
+    <tr><td>Контрольная группа</td>
+        <td>{{ "есть" if pi.control_group else "НЕТ — цифры недоказуемы" }}</td></tr>
+    {% if pi.power %}
+    <tr><td>Доказательность</td>
+        <td>прирост {{ pi.power.observed_uplift | pct }} против различимого
+            {{ pi.power.min_detectable | pct }} при {{ pi.power.n_per_group | num }} на группу —
+            <b>{{ "доказан" if pi.power.conclusive else "НЕ ДОКАЗАН" }}</b></td></tr>
+    {% endif %}
+    <tr><td>Коэффициент переноса</td><td>{{ pi.scale_haircut }} — перенесено
+        {{ pi.scale_haircut | pct(0) }} прироста</td></tr>
+    {% for a in pi.applied %}
+    <tr><td>{{ a.param }}</td>
+        <td>{{ a.previous if a.previous is not none else "—" }} →
+            <b>{{ a.applied_value | round(4) }}</b> (пилот давал {{ a.pilot_value }})</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+
+{% if res.currency and res.currency.in_rub %}
+{% set cu = res.currency %}
+<section class="card">
+  <h3>В рублях</h3>
+  <p class="muted">Расчёт ведётся в {{ cu.currency }} по курсу {{ cu.fx_to_rub }} за 1 ₽.
+  Комитет меряет в рублях — нужны обе валюты из одного прогона.</p>
+  <table class="grid">
+    <tr><td>NPV</td><td class="r">{{ cu.in_rub.npv | mln }}</td></tr>
+    <tr><td>Чистый эффект</td><td class="r">{{ cu.in_rub.net_effect | mln }}</td></tr>
+    <tr><td>Маркетинговые затраты</td><td class="r">{{ cu.in_rub.marketing_cost | mln }}</td></tr>
+    {% if cu.in_rub.incremental_cpa %}
+    <tr><td>Инкрементальный CPA</td><td class="r">{{ cu.in_rub.incremental_cpa | money }}</td></tr>
+    {% endif %}
+  </table>
 </section>
 {% endif %}
 

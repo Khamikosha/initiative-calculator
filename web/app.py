@@ -69,8 +69,12 @@ def _fmt_num(v, digits=0):
 
 
 tpl.env.filters["num"] = lambda v, d=0: _fmt_num(v, d)
-tpl.env.filters["money"] = lambda v: "—" if v is None else _fmt_num(v) + " ₽"
-tpl.env.filters["mln"] = lambda v: "—" if v is None else _fmt_num(float(v) / 1e6, 1) + " млн ₽"
+# Валюта — аргумент фильтра, а не константа: расчёт в сумах, подписанный рублями,
+# выглядит правдоподобно и неверен ровно на курс. По умолчанию рубль,
+# чтобы старые шаблоны и кейсы в рублях не менялись.
+tpl.env.filters["money"] = lambda v, cur="₽": "—" if v is None else _fmt_num(v) + f" {cur}"
+tpl.env.filters["mln"] = lambda v, cur="₽": ("—" if v is None
+                                             else _fmt_num(float(v) / 1e6, 1) + f" млн {cur}")
 tpl.env.filters["pct"] = lambda v, d=1: "—" if v is None else _fmt_num(float(v) * 100, d) + "%"
 tpl.env.filters["from_json"] = lambda s: json.loads(s or "{}")
 tpl.env.globals.update(params=params, calc=calc, SEGMENTS=calc.SEGMENTS,

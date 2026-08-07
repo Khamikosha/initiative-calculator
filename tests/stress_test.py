@@ -507,6 +507,57 @@ check("Окупаемость на живом кейсе по-прежнему �
           (CASES / "comms_push_base.json").read_text(encoding="utf-8")
       )))["pl"]["payback_months"] is not None)
 
+# --- инициатива БЕЗ привлечения: эффект целиком на своей базе ------------------
+# Раньше движок смотрел только на incremental_clients и на прогоне с маржой
+# в 19 млн ₽ отвечал «нечего считать»: считал верно и говорил неправду.
+# На зрелом рынке (проникновение 89%) это основной тип инициативы, а не вырожденный.
+base_only = {
+    "meta": {"name": "разбудить спящих", "type": "comms", "horizon_months": 24},
+    "audience": {"target_size": 1000},
+    "base_activation": {"eligible_clients": 1_000_000, "reach_share": 0.3,
+                        "uplift_rate": 0.1, "measured_against_control": "да",
+                        "turnover_before": 4000, "turnover_after": 12000,
+                        "balance_before": 3000, "balance_after": 9000,
+                        "decay_months": 12},
+    "unit_economics": {"interchange_rate": 0.011, "cashback_rate": 0.003,
+                       "nim_annual": 0.07, "monthly_churn": 0.03},
+    "costs": {"campaign_months": 6}, "funnel": {},
+}
+res_bo = calc.analyze(calc.resolve_segments(calc.normalize(copy.deepcopy(base_only))))
+check("Инициатива без привлечения не объявляется пустым прогоном",
+      res_bo["verdict"].get("nothing_to_calculate") is not True,
+      f'вердикт: {res_bo["verdict"]["recommendation"][:60]}')
+check("Маржа растранзачивания попадает в результат",
+      res_bo["pl"]["margin_sources"]["base_activation"] > 0)
+check("Вердикт выносится по NPV, а не по числу новых клиентов",
+      res_bo["funnel"]["incremental_clients"] == 0 and res_bo["pl"]["npv"] > 0
+      and "НЕЧЕГО СЧИТАТЬ" not in res_bo["verdict"]["recommendation"])
+check("Отсутствие привлечения объясняется, а не выдаётся за ошибку ввода",
+      any("БЕЗ ПРИВЛЕЧЕНИЯ" in m for m in res_bo["validation"]) and
+      not any("нет ни одного канала" in m for m in res_bo["validation"]))
+
+# --- удержание откладывает уход, а не отменяет его ----------------------------
+# `retained` раньше только рос: связанный клиент, удержанный на первом месяце,
+# приносил полный доход все 36 месяцев и не уходил никогда.
+def _linked_retention(churn_annual, months=36):
+    cfg = {"linked_client": {"clients_per_linked": 1, "income_annual": 12000,
+                             "attribution_share": 0, "cross_sell_uplift": 0,
+                             "churn_annual": churn_annual, "churn_reduction": 1.0}}
+    rows = calc.linked_stream(cfg, [100_000.0] * months)
+    return rows[-1]["retained_cum"]
+
+
+_ret_low = _linked_retention(0.07)
+_ret_high = _linked_retention(0.60)
+check("Удержанные не накапливаются без предела — они оттекают",
+      _ret_low < 100_000 * (0.07 / 12) * 36,
+      f"на конец {_ret_low:.0f} против {100_000 * (0.07/12) * 36:.0f} при вечной жизни")
+check("Чем выше отток связанного, тем сильнее расходится с прежней формулой",
+      _ret_high / (100_000 * (0.60 / 12) * 36) < _ret_low / (100_000 * (0.07 / 12) * 36),
+      "на высоком оттоке старая формула завышала кратно")
+check("Удержание всё же накапливает эффект, а не обнуляется",
+      _ret_low > 0 and _ret_high > 0)
+
 zero_conv = copy.deepcopy(BASE)
 for ch in zero_conv["channels"]:
     ch["cr_to_app"] = 0; ch["brand_uplift"] = 0
