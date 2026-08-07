@@ -29,10 +29,11 @@ except ImportError:
 # который выглядит как успех, ровно так же врёт, как зелёная сверка не того с тем же.
 # Поэтому отдельный исход: «не сверяется, и вот почему». См. BACKLOG 18.
 BOOK_UNSUPPORTED = {
-    "acquisition":   "план продаж с сезонностью и темпом год-к-году",
-    "linked_client": "связанный клиент (удержание, привлечение, кросс-селл)",
-    "companion":     "продукт-спутник",
-    "partner":       "P&L партнёра",
+    "acquisition":     "план продаж с сезонностью и темпом год-к-году",
+    "linked_client":   "связанный клиент (удержание, привлечение, кросс-селл)",
+    "companion":       "продукт-спутник",
+    "partner":         "P&L партнёра",
+    "base_activation": "растранзачивание своей базы",
 }
 _raw = json.loads(CASE.read_text(encoding="utf-8"))
 _missing = {k: v for k, v in BOOK_UNSUPPORTED.items() if _raw.get(k)}

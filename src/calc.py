@@ -229,6 +229,15 @@ SCHEMA = {
     "unit_economics": {**UE_KEYS, "mode": None, "value_horizon_months": (1, 600),
                        "turnover_split": None, "balance_to_turnover": (0.0, 10.0)},
     "acquisition": {"year1_target": (0.0, 1e9), "yoy_growth": (0.0, 5.0), "seasonality": None},
+    # Третья сущность эффекта: ТОТ ЖЕ человек, ТОТ ЖЕ продукт, другое поведение.
+    # Все поля скалярные, поэтому это обычный раздел — и веб-форма получает его даром.
+    "base_activation": {
+        "name": None, "eligible_clients": (0.0, 2e9), "reach_share": _RATE,
+        "uplift_rate": _RATE, "measured_against_control": None,
+        "turnover_before": (0.0, 1e9), "turnover_after": (0.0, 1e9),
+        "balance_before": (0.0, 1e9), "balance_after": (0.0, 1e9),
+        "decay_months": (0.0, 600.0), "attribution_share": _RATE,
+    },
     "brief": None,              # проверяется отдельно: есть вложенные объекты
     "pilot": None,
     "linked_client": None,
@@ -785,6 +794,57 @@ def companion_stream(cfg, active, u):
     return rows
 
 
+def base_activation_stream(cfg, shape, u):
+    """Растранзачивание своей базы: ТОТ ЖЕ человек, ТОТ ЖЕ продукт, другое поведение.
+
+    Третья сущность эффекта, и её нельзя свести к двум существующим:
+      linked_client — другой человек (родитель платит за детскую карту);
+      companion     — другой продукт (копилка поверх карты);
+      здесь         — тот же клиент того же продукта начинает платить активнее.
+
+    Почему без неё нельзя считать зрелый рынок. При проникновении 89% «привлечение»
+    новых людей физически упирается в потолок: их почти не осталось. Весь эффект
+    инициативы сидит в том, что спящий клиент просыпается, а этого движок не умел
+    выражать вовсе — воронка привлечения такой прирост не описывает.
+
+    Единица эффекта здесь не клиент, а ПРИРОСТ ОБОРОТА И ОСТАТКА. Затрат на
+    привлечение нет: клиент уже есть, платить за него второй раз не нужно.
+
+    Растранзаченные НЕ добавляются в АКБ и НЕ попадают в инкремент: они уже в базе.
+    Иначе один и тот же человек посчитался бы дважды — как новый и как проснувшийся.
+    """
+    b = cfg.get("base_activation")
+    if not b:
+        return None
+    eligible = g(b, "eligible_clients")
+    activated = eligible * g(b, "reach_share") * g(b, "uplift_rate") * g(b, "attribution_share", 1.0)
+    if activated <= 0:
+        return None
+
+    d_turn = g(b, "turnover_after") - g(b, "turnover_before")
+    d_bal = g(b, "balance_after") - g(b, "balance_before")
+    fee = split_fee(g(u, "turnover_split", None), g(u, "interchange_rate"))
+    # Ставки берутся у ОСНОВНОГО продукта: это его оборот и его остаток выросли.
+    # Обслуживание не добавляется — клиента уже обслуживают, инициатива этого не меняет.
+    per_client = (d_bal * g(u, "nim_annual") / 12.0
+                  + d_turn * fee
+                  - d_turn * g(u, "cashback_rate"))
+
+    decay = g(b, "decay_months")
+    cohorts = [activated * w for w in shape]
+    rows = []
+    for m in range(len(shape)):
+        # Каждая когорта проснувшихся затухает линейно за decay_months.
+        # Ноль означает «эффект держится вечно» — так почти не бывает, и validate() скажет.
+        live = sum(c * (1.0 if decay <= 0 else max(0.0, 1.0 - (m - j) / decay))
+                   for j, c in enumerate(cohorts[:m + 1]))
+        rows.append({"active_uplifted": live, "margin": live * per_client,
+                     "turnover_uplift": live * d_turn, "balance_uplift": live * d_bal})
+    return {"rows": rows, "activated_total": activated,
+            "margin_per_client_m": per_client,
+            "turnover_delta": d_turn, "balance_delta": d_bal}
+
+
 def linked_stream(cfg, active):
     """Эффект на СВЯЗАННОГО клиента — того, кто сам продукт не берёт.
 
@@ -1010,7 +1070,8 @@ def run_pl(cfg, funnel):
     # Форма притока: план продаж с сезонностью и темпом год-к-году, если он задан,
     # иначе равномерно по месяцам кампании. Уровень всегда берётся из инкремента,
     # чтобы каннибализация и deadweight не обходились планом стороной.
-    cohorts = [inc * w for w in acquisition_shape(cfg, h, camp_m)]
+    shape = acquisition_shape(cfg, h, camp_m)
+    cohorts = [inc * w for w in shape]
 
     # Активная база считается до потоков: и спутник, и связанный клиент живут на ней.
     active_curve, a = [], 0.0
@@ -1019,6 +1080,9 @@ def run_pl(cfg, funnel):
         active_curve.append(a)
     comp = companion_stream(cfg, active_curve, u)
     linked = linked_stream(cfg, active_curve)
+    # Растранзачивание идёт по форме кампании, а не по кривой активной базы:
+    # просыпается уже существующий клиент, когда до него дотянулась коммуникация.
+    basact = base_activation_stream(cfg, shape, u)
 
     rows, cum, cum_disc, payback = [], 0.0, 0.0, None
     for m in range(h):
@@ -1038,7 +1102,8 @@ def run_pl(cfg, funnel):
         gm_own = gm
         gm_comp = (comp[m]["margin"] + comp[m]["spend_fee"]) if comp else 0.0
         gm_linked = linked[m]["total"] if linked else 0.0
-        gm += gm_comp + gm_linked
+        gm_base = basact["rows"][m]["margin"] if basact else 0.0
+        gm += gm_comp + gm_linked + gm_base
         cost = ((media + acq_total) / camp_m if m < camp_m else 0.0)
         if m == 0:
             cost += g(k, "production") + g(k, "it_dev") + g(k, "one_off_other")
@@ -1055,7 +1120,8 @@ def run_pl(cfg, funnel):
         if not value_mode and payback is None and cum >= 0 and gm_cum > 0:
             payback = m + 1
         rows.append({"month": m + 1, "active_clients": active, "gross_margin": gm,
-                     "margin_own": gm_own, "margin_companion": gm_comp, "margin_linked": gm_linked,
+                     "margin_own": gm_own, "margin_companion": gm_comp,
+                     "margin_linked": gm_linked, "margin_base_activation": gm_base,
                      "costs": cost, "net": net, "cumulative": cum, "cumulative_discounted": cum_disc})
     total_gm = sum(r["gross_margin"] for r in rows); total_cost = sum(r["costs"] for r in rows)
     mkt_cost = media + g(k, "production") + acq_total
@@ -1066,11 +1132,12 @@ def run_pl(cfg, funnel):
     # окупаться связанным клиентом — а значит и управлять надо связанным клиентом.
     src = {"own_product": round(sum(r["margin_own"] for r in rows)),
            "companion": round(sum(r["margin_companion"] for r in rows)),
-           "linked_client": round(sum(r["margin_linked"] for r in rows))}
+           "linked_client": round(sum(r["margin_linked"] for r in rows)),
+           "base_activation": round(sum(r["margin_base_activation"] for r in rows))}
     # Доли считаются только когда все слагаемые одного знака. Если один источник
     # в минусе, «доля в марже» перестаёт что-либо значить: получаются 3454% у одного
     # и −2134% у другого. Вместо бессмысленного процента отдаём пустое и причину.
-    parts = [src["own_product"], src["companion"], src["linked_client"]]
+    parts = [src["own_product"], src["companion"], src["linked_client"], src["base_activation"]]
     src["shares"] = ({kk: round(vv / total_gm, 4) for kk, vv in src.items()}
                      if total_gm > 0 and all(v >= 0 for v in parts) else None)
     if src["shares"] is None:
@@ -1092,9 +1159,23 @@ def run_pl(cfg, funnel):
             "balance_peak": round(max(x["balance_total"] for x in comp)),
             "margin_total": round(sum(x["margin"] for x in comp)),
             "spend_fee_total": round(sum(x["spend_fee"] for x in comp))}
+    base_detail = None
+    if basact:
+        rws = basact["rows"]
+        base_detail = {
+            "name": (cfg.get("base_activation") or {}).get("name", "Растранзачивание базы"),
+            "activated_clients": round(basact["activated_total"]),
+            "peak_active_uplifted": round(max(x["active_uplifted"] for x in rws)),
+            "end_active_uplifted": round(rws[-1]["active_uplifted"]),
+            "turnover_delta_per_client": round(basact["turnover_delta"]),
+            "balance_delta_per_client": round(basact["balance_delta"]),
+            "margin_per_client_m": round(basact["margin_per_client_m"], 2),
+            "turnover_uplift_total": round(sum(x["turnover_uplift"] for x in rws)),
+            "margin_total": round(sum(x["margin"] for x in rws))}
     return {"horizon_months": h, "effect": effect,
             "market": market_position(cfg, active_curve),
             "margin_sources": src, "linked": linked_detail, "companion": companion_detail,
+            "base_activation": base_detail,
             "partner": partner_pl(cfg, active_curve, cohorts, u),
             "mode": MODE_VALUE if value_mode else MODE_BUILD_UP,
             "value_per_client": round(value) if value_mode else None,
@@ -1147,7 +1228,9 @@ TORNADO = [("Конверсия в заявку (все каналы)", "conv"),
            ("Отток (churn)", ("unit_economics", "monthly_churn")), ("Кэшбэк", ("unit_economics", "cashback_rate")),
            ("Стоимость риска (CoR)", ("unit_economics", "cor_annual")),
     ("Deadweight (взяли бы и так)", ("funnel", "deadweight")),
-    ("Выплата за привлечение", ("costs", "acq_cost_per_client"))]
+    ("Выплата за привлечение", ("costs", "acq_cost_per_client")),
+    ("Доля растранзаченных (uplift над контролем)", ("base_activation", "uplift_rate")),
+    ("Оборот после растранзачивания", ("base_activation", "turnover_after"))]
 
 # В режиме ценности драйверов юнит-экономики нет — вместо шести отдельных допущений
 # одно число из чужой модели. Крутить его компоненты у нас нечем и незачем.
@@ -1157,7 +1240,10 @@ TORNADO_VALUE = [("Конверсия в заявку (все каналы)", "c
                  ("Каннибализация", ("funnel", "cannibalization")),
                  ("Ценность клиента", ("unit_economics", "value_per_client")),
                  ("Deadweight (взяли бы и так)", ("funnel", "deadweight")),
-                 ("Выплата за привлечение", ("costs", "acq_cost_per_client"))]
+                 ("Выплата за привлечение", ("costs", "acq_cost_per_client")),
+                 ("Доля растранзаченных (uplift над контролем)",
+                  ("base_activation", "uplift_rate")),
+                 ("Оборот после растранзачивания", ("base_activation", "turnover_after"))]
 
 
 def tornado(cfg, base_npv, delta=0.25):
@@ -1323,6 +1409,40 @@ def validate_extensions(cfg, f, pl):
             "продукте, который выводится. Проверьте: если эффект на связанного клиента "
             "не подтвердится замером, остаётся чистый убыток."
             )
+    ba, bad = cfg.get("base_activation"), pl.get("base_activation")
+    if ba and bad:
+        if not ba.get("measured_against_control"):
+            out.append(
+                "РАСТРАНЗАЧИВАНИЕ БЕЗ КОНТРОЛЬНОЙ ГРУППЫ: uplift_rate задан без замера "
+                "против контроля. Спящая база оживает и сама — сезонностью, зарплатой, "
+                "прочими активностями. Без контроля вы приписываете инициативе чужой "
+                "прирост, и проверить это уже нечем. Все цифры блока — грейд C, "
+                "а вердикт по ним принимать нельзя.")
+        if g(ba, "decay_months") <= 0:
+            out.append(
+                "ЭФФЕКТ БЕЗ ЗАТУХАНИЯ: decay_months = 0, то есть проснувшийся клиент "
+                "остаётся активным до конца горизонта. Так почти не бывает: всплеск "
+                "транзакционной активности после коммуникации гаснет за несколько месяцев. "
+                "Задайте срок затухания явно — это допущение, а не его отсутствие.")
+        if g(ba, "attribution_share", 1.0) >= 1.0 and ba.get("measured_against_control"):
+            out.append(
+                "АТРИБУЦИЯ 100% при замере против контроля — это законно: uplift над "
+                "контролем уже инкрементален по построению. Оставлено как есть.")
+        out.append(
+            f"РАСТРАНЗАЧЕНО НЕ ЗНАЧИТ ПРИВЛЕЧЕНО: {nf(bad['activated_clients'])} клиентов "
+            "сменили поведение, но они УЖЕ в базе. В АКБ и в инкремент они намеренно "
+            "не попадают — иначе один человек посчитался бы дважды, как новый и как "
+            "проснувшийся. Растёт ОД и оборот, а не число клиентов.")
+        # Тот же медиабюджет не может одновременно приводить новых и будить спящих
+        # в полную силу: это один и тот же контакт. Разводить их должен человек.
+        if f.get("incremental_clients", 0) > 0:
+            out.append(
+                f"ПРОВЕРЬТЕ ПЕРЕСЕЧЕНИЕ: в одном прогоне и привлечение "
+                f"({nf(f['incremental_clients'])} новых), и растранзачивание "
+                f"({nf(bad['activated_clients'])} проснувшихся). Если это один и тот же "
+                "медиаконтакт, часть бюджета засчитана дважды. Убедитесь, что охват базы "
+                "и охват рынка заданы разными каналами.")
+
     comp = cfg.get("companion")
     if comp and comp.get("spend_returns_to_turnover"):
         out.append(f"ПРОВЕРЬТЕ ДВОЙНОЙ СЧЁТ: траты из «{comp.get('name', 'спутника')}» приносят "

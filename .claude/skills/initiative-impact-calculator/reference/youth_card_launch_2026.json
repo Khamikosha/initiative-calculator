@@ -15,7 +15,11 @@
        "maps_to": null, "status": "question"},
 
       {"claim": "пилот показал эффективность по транзакционной активности",
-       "implication": "нужен фактический месячный оборот пилотной группы против контрольной — сейчас оборот взят из реестра по возрастам",
+       "implication": "это не про новых клиентов, а про растранзачивание уже имеющихся: тот же человек того же продукта начал платить активнее. Считается блоком base_activation, а не воронкой привлечения",
+       "maps_to": "base_activation.uplift_rate", "grade": "B_minus", "status": "applied"},
+
+      {"claim": "пилот показал эффективность по активации базы (сколько именно спящих проснулось и насколько вырос их оборот)",
+       "implication": "нужны цифры пилота по обеим группам: доля сменивших поведение над контролем, оборот и остаток до и после. Сейчас взяты ориентиры",
        "maps_to": null, "status": "question"},
 
       {"claim": "выдаём по всей стране",
@@ -70,6 +74,20 @@
        "avg_balance": 28000, "monthly_turnover": 24000, "monthly_churn": 0.04,
        "operating_income_annual": 4555}
     ]
+  },
+
+  "base_activation": {
+    "name": "Растранзачивание спящей молодёжи",
+    "eligible_clients": 4100000,
+    "reach_share": 0.30,
+    "uplift_rate": 0.10,
+    "measured_against_control": "пилот в Москве: тест против контроля",
+    "turnover_before": 4000,
+    "turnover_after": 12000,
+    "balance_before": 3000,
+    "balance_after": 9000,
+    "decay_months": 18,
+    "attribution_share": 1.0
   },
 
   "channels": [
