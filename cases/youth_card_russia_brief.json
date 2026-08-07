@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "name": "Молодёжная карта с привилегиями и спецдизайном (РФ)",
+    "type": "product_launch",
+    "product": "card",
+    "horizon_months": 36,
+    "discount_rate_annual": 0.20
+  },
+
+  "brief": {
+    "description": "Сделать карту с уникальными привилегиями при оплате и специализированным молодёжным дизайном. Выдаём по всей стране. Есть список федеральных и региональных партнёров для предоставления скидки при оплате. Уже есть пилот, который на территории Москвы показал свою эффективность по активации базы и транзакционной активности.",
+    "claims": [
+      {"claim": "пилот в Москве показал эффективность по активации базы",
+       "implication": "activation rate берём из факта пилота, но с переносом Москва → страна",
+       "maps_to": "pilot.metrics.activation_rate", "grade": "B_minus", "status": "applied"},
+
+      {"claim": "пилот показал эффективность по транзакционной активности",
+       "implication": "месячный оборот из факта пилота, с тем же переносом",
+       "maps_to": "pilot.metrics.monthly_turnover", "grade": "B_minus", "status": "applied"},
+
+      {"claim": "выдаём по всей стране",
+       "implication": "достижимый рынок — вся РФ 14–24, а не Москва; медиаинфляция регионов ниже",
+       "maps_to": "audience.reachable_market", "grade": "C", "status": "applied"},
+
+      {"claim": "специализированный молодёжный дизайн",
+       "implication": "именной пластик дороже стандартного при выпуске",
+       "maps_to": "costs.acq_cost_per_client", "grade": "C", "status": "applied"},
+
+      {"claim": "уникальные привилегии при оплате",
+       "implication": "стоимость привилегий — это кэшбэк или его аналог, ложится в costs",
+       "maps_to": "unit_economics.cashback_rate", "grade": "D", "status": "applied"},
+
+      {"claim": "список федеральных и региональных партнёров для скидки при оплате",
+       "implication": "кто финансирует скидку — банк или партнёр? Если банк, это отдельная строка затрат сверх кэшбэка. Если партнёр — ноль затрат и, возможно, доход от партнёрской программы",
+       "maps_to": null, "status": "question"},
+
+      {"claim": "карта для молодёжи",
+       "implication": "подростки 14–17 и молодёжь 18–24 — разная экономика и разная доступность продуктов",
+       "maps_to": "audience.segments", "grade": "A", "status": "applied"},
+
+      {"claim": "региональные партнёры",
+       "implication": "разный набор привилегий по городам меняет привлекательность предложения по географии",
+       "maps_to": null,
+       "reason": "модель считает страну одним куском; географическую разбивку эффекта отдельным прогоном, если решение по бюджету будет региональным",
+       "status": "ignored"}
+    ]
+  },
+
+  "pilot": {
+    "name": "Пилот в Москве",
+    "geography": "Москва",
+    "rollout_geography": "РФ",
+    "audience": "действующая база, отклик на in-app",
+    "control_group": true,
+    "sample_size": 40000,
+    "control_size": 40000,
+    "duration_months": 3,
+    "baseline_rate": 0.52,
+    "observed_rate": 0.61,
+    "scale_haircut": 0.75,
+    "metrics": {"activation_rate": 0.61, "monthly_turnover": 34000}
+  },
+
+  "audience": {
+    "reachable_market": 1200000,
+    "market_total": 16500000,
+    "baseline_organic_apps_m": 18000,
+    "segments": [
+      {"id": "teens", "target_size": 1500000, "existing_clients": 1125000,
+       "avg_balance": 9000, "monthly_churn": 0.03, "approval_rate": 0.95},
+      {"id": "youth", "target_size": 1200000, "existing_clients": 1068000,
+       "avg_balance": 28000, "monthly_churn": 0.04, "approval_rate": 0.90}
+    ]
+  },
+
+  "channels": [
+    {"name": "Внутренние push / in-app", "kind": "internal", "frk_tier": 4,
+     "reach_abs": 4000000, "budget": 0, "response_rate": 0.025, "cr_to_app": 0.28},
+    {"name": "Перформанс", "kind": "perform", "frk_tier": 4,
+     "budget": 60000000, "cpm": 420, "ctr": 0.008, "cr_to_app": 0.05}
+  ],
+
+  "funnel": {
+    "approval_rate": 0.92,
+    "activation_rate": 0.55,
+    "cannibalization": 0.30,
+    "deadweight": 0.0
+  },
+
+  "unit_economics": {
+    "mode": "build_up",
+    "monthly_turnover": 24000,
+    "balance_to_turnover": 0.85,
+    "nim_annual": 0.07,
+    "interchange_rate": 0.011,
+    "cashback_rate": 0.007,
+    "servicing_cost_m": 60,
+    "cor_annual": 0.0,
+    "ramp_months": 3,
+    "monthly_churn": 0.035,
+    "operating_income_annual": 2400
+  },
+
+  "costs": {
+    "it_dev": 45000000,
+    "production": 20000000,
+    "opex_monthly": 3000000,
+    "campaign_months": 6,
+    "acq_cost_per_client": 350
+  },
+
+  "rice": {"reach": 0, "impact": 2, "confidence": 0.6, "effort": 24},
+
+  "confidence": {"A": 6, "B": 4, "B_minus": 5, "C": 6, "D": 4}
+}
