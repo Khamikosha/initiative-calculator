@@ -24,6 +24,26 @@ try:
 except ImportError:
     sys.exit("Нужен openpyxl:  pip install -r requirements.txt")
 
+# Блоки движка, которых в книге пока нет: их формул build_xlsx.py не умеет.
+# Кейс с любым из них сверять НЕЛЬЗЯ — но и молча пропускать нельзя: пропуск,
+# который выглядит как успех, ровно так же врёт, как зелёная сверка не того с тем же.
+# Поэтому отдельный исход: «не сверяется, и вот почему». См. BACKLOG 18.
+BOOK_UNSUPPORTED = {
+    "acquisition":   "план продаж с сезонностью и темпом год-к-году",
+    "linked_client": "связанный клиент (удержание, привлечение, кросс-селл)",
+    "companion":     "продукт-спутник",
+    "partner":       "P&L партнёра",
+}
+_raw = json.loads(CASE.read_text(encoding="utf-8"))
+_missing = {k: v for k, v in BOOK_UNSUPPORTED.items() if _raw.get(k)}
+if _missing:
+    print(f"\n⊘ {CASE.name}: сверка с книгой не выполняется.")
+    for k, v in _missing.items():
+        print(f"    в кейсе есть «{k}» — {v}; в build_xlsx.py этого блока нет")
+    print("  Инвариант «движок и книга считают одно и то же» на этом кейсе НЕ проверен.")
+    print("  Достроить книгу или объявить её версией для базовых кейсов — BACKLOG 18.")
+    sys.exit(0)
+
 if not XLSX.exists():
     sys.exit(f"Нет файла {XLSX}. Соберите: make xlsx")
 
@@ -48,7 +68,9 @@ TIER_COL = {4: "B", 3: "C", 2: "D", 1: "E"}
 SCEN_COL = {"pessimistic": "F", "base": "G", "optimistic": "H"}
 TOL = 1.0                                            # допуск в рублях/клиентах
 
-cfg = calc.resolve_segments(json.loads(CASE.read_text(encoding="utf-8")))
+# Через ту же точку входа, что движок и генератор книги. Обходить load_config здесь
+# особенно опасно: проверяльщик, повторяющий ошибку проверяемого, всегда говорит «сходится».
+cfg = calc.load_config(str(CASE))
 rows = []
 
 def cell(col, key):

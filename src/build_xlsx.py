@@ -20,8 +20,13 @@ OUT = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "docs" / "Кальку�
 _spec = importlib.util.spec_from_file_location("calc", Path(__file__).with_name("calc.py"))
 calc = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(calc)
 
-# Сегменты сводятся движком — Excel получает и посегментные вводные, и те же веса живыми формулами
-CFG = calc.resolve_segments(json.loads(CASE.read_text(encoding="utf-8")))
+# Книга собирается из ТОГО ЖЕ конфига, что считает движок — через единственную точку входа.
+# Раньше здесь стоял `resolve_segments(json.loads(...))`, то есть в обход validate_config,
+# apply_pilot и normalize. Книга получала исходные значения кейса, движок — подставленные
+# пилотом и производные: на кейсе с пилотом это 0,55 против 0,595 по активации и
+# 24 000 против 31 500 по обороту. Сверка при этом была ЗЕЛЁНОЙ, потому что проверяльщик
+# обходил load_config ровно так же и сравнивал две одинаково неверные картины.
+CFG = calc.load_config(str(CASE))
 SEG = CFG.get("_segments")
 
 def q(section, key, default=0):
