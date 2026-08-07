@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -193,9 +194,58 @@ client.post("/author", data={"author": "Тестировщик", "back": "/"}, f
 r = client.post("/initiative/new", data={
     "name": "Молодёжная карта — тест", "type": "frk3", "product": "card",
     "description": "Проверка сквозного пути"}, follow_redirects=False)
-check("Инициатива создаётся и ведёт на выбор сегментов",
-      r.status_code == 303 and "/segments" in r.headers["location"])
+check("Инициатива создаётся и ведёт на разбор брифа",
+      r.status_code == 303 and "/brief" in r.headers["location"])
 iid = int(r.headers["location"].split("/")[2])
+
+# ---------------------------------------------------------------- 2a. Шаг «Бриф»
+# Описание инициативы — не украшение названия, а непроверенный источник параметров.
+# Пока оно не разложено на утверждения, модель считает обеднённую версию инициативы,
+# и человек об этом не знает: цифра выглядит уверенно.
+r = client.get(f"/initiative/{iid}/brief")
+check("Шаг «Бриф» открывается и показывает описание дословно",
+      r.status_code == 200 and "Проверка сквозного пути" in r.text)
+
+r = client.post(f"/initiative/{iid}/brief", data={
+    "claim.0.claim": "выдаём по всей стране",
+    "claim.0.implication": "достижимый рынок — вся РФ",
+    "claim.0.status": "applied",
+    "claim.0.maps_to": "",                       # applied без параметра — движок обязан ругнуться
+    "action": "save"}, follow_redirects=False)
+check("Бриф без maps_to не принимается — правило проверяет движок, а не форма",
+      r.status_code == 303 and "error=" in r.headers["location"])
+check("Причина отказа доносится человеку",
+      "maps_to" in unquote(r.headers["location"]))
+
+r = client.post(f"/initiative/{iid}/brief", data={
+    "claim.0.claim": "выдаём по всей стране",
+    "claim.0.implication": "достижимый рынок — вся РФ",
+    "claim.0.status": "applied", "claim.0.maps_to": "audience.reachable_market",
+    "claim.0.grade": "C",
+    "claim.1.claim": "партнёры дают скидку",
+    "claim.1.implication": "кто её финансирует — банк или партнёр?",
+    "claim.1.status": "question",
+    "claim.2.claim": "региональные различия",
+    "claim.2.status": "ignored",
+    "claim.2.reason": "страна считается одним куском",
+    "claim.3.claim": "",                          # пустая строка выбрасывается
+    "action": "save"}, follow_redirects=False)
+check("Заполненный бриф сохраняется", r.status_code == 303 and "error=" not in r.headers["location"])
+
+_cfg = json.loads(_db.get_initiative(app_mod.con, iid)["config_json"])
+check("Утверждения легли в конфиг", len(_cfg["brief"]["claims"]) == 3)
+check("Пустая строка таблицы не попала в конфиг",
+      all(c.get("claim") for c in _cfg["brief"]["claims"]))
+check("Описание инициативы попало в бриф дословно",
+      _cfg["brief"]["description"] == "Проверка сквозного пути")
+
+_cov = calc.brief_coverage(_cfg)
+check("Покрытие считает движок, а не форма — 1 из 3",
+      _cov["applied"] == 1 and _cov["questions"] == 1 and _cov["ignored"] == 1)
+
+r = client.get(f"/initiative/{iid}/brief")
+check("Открытые вопросы и неучтённое видны на странице",
+      "1" in r.text and "Разобрано" in r.text)
 
 # httpx отправляет повторяющиеся поля только словарём со списком; список кортежей молча теряется
 r = client.post(f"/initiative/{iid}/segments", data={

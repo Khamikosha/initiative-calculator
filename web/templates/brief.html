@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Бриф</h1>
+<p class="lead">Разложите описание инициативы на отдельные утверждения. Каждое либо становится
+параметром модели, либо остаётся вопросом, либо сознательно не учитывается — но с причиной.
+<b>Всё, что не стало параметром, попадёт в отчёт отдельным блоком</b> сразу после вердикта:
+читатель обязан знать, чего в цифре нет.</p>
+
+<div class="callout">
+Это самый дорогой класс ошибок в модели. Неверную цифру видно, а потерянную вводную — нет:
+расчёт выглядит уверенно и правдоподобно, просто считает не ту инициативу, которую вы описали.
+</div>
+
+{% if error %}
+<div class="callout bad">
+  <b>Движок не принял бриф:</b>
+  <ul>{% for line in error.split("\n") %}<li>{{ line.lstrip("- ") }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+{% if init.description %}
+<div class="card">
+  <h2>Описание инициативы</h2>
+  <p class="quote">{{ init.description }}</p>
+  <p class="hint">Правится на шаге «Описание». В отчёт попадает дословно.</p>
+</div>
+{% else %}
+<div class="callout bad">
+  Описание пустое — раскладывать нечего. Заполните его на шаге
+  <a href="/initiative/{{ init.id }}/edit">«Описание»</a>, иначе модель посчитает
+  инициативу без всего, что вы о ней знаете.
+</div>
+{% endif %}
+
+{% if coverage and coverage.total %}
+<div class="callout {{ 'ok' if coverage.coverage >= 0.5 else 'bad' }}">
+  Разобрано <b>{{ coverage.applied }}</b> из {{ coverage.total }} утверждений
+  ({{ (coverage.coverage * 100) | round | int }}%).
+  Открытых вопросов — {{ coverage.questions }}, не учтено сознательно — {{ coverage.ignored }}.
+  {% if coverage.coverage < 0.5 %}
+  Ниже половины: модель посчитает обеднённую версию инициативы.
+  {% endif %}
+</div>
+{% endif %}
+
+<form method="post" class="card" id="briefform" autocomplete="off">
+  <table class="claims">
+    <thead>
+      <tr>
+        <th style="width:26%">Утверждение из описания</th>
+        <th style="width:26%">Что это значит для модели</th>
+        <th style="width:14%">Судьба</th>
+        <th style="width:17%">Параметр / причина</th>
+        <th style="width:10%">Грейд</th>
+        <th style="width:7%"></th>
+      </tr>
+    </thead>
+    <tbody id="claims">
+      {% for c in claims %}
+      <tr class="claim" data-i="{{ loop.index0 }}">
+        <td><textarea name="claim.{{ loop.index0 }}.claim" rows="2"
+                      placeholder="цитата из описания">{{ c.claim or "" }}</textarea></td>
+        <td><textarea name="claim.{{ loop.index0 }}.implication" rows="2"
+                      placeholder="какой параметр это задаёт или что нужно уточнить">{{ c.implication or "" }}</textarea></td>
+        <td>
+          <select name="claim.{{ loop.index0 }}.status" class="status">
+            <option value="">—</option>
+            {% for s in statuses %}
+            <option value="{{ s }}" {{ 'selected' if c.status == s }}>
+              {{ {'applied': 'стало параметром', 'question': 'нужен ответ', 'ignored': 'не учитываем'}[s] }}
+            </option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <input name="claim.{{ loop.index0 }}.maps_to" value="{{ c.maps_to or '' }}"
+                 placeholder="unit_economics.cashback_rate" class="f-applied">
+          <input name="claim.{{ loop.index0 }}.reason" value="{{ c.reason or '' }}"
+                 placeholder="почему не учитываем" class="f-ignored">
+        </td>
+        <td>
+          <select name="claim.{{ loop.index0 }}.grade" class="f-applied">
+            <option value="">—</option>
+            {% for g in grades %}
+            <option value="{{ g }}" {{ 'selected' if c.grade == g }}>{{ g.replace("_minus", "−") }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td><button type="button" class="ghost del">✕</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p><button type="button" class="ghost" id="add">+ Утверждение</button></p>
+
+  <details class="hint">
+    <summary>Что куда обычно ложится</summary>
+    <table class="hints">
+      <tr><td>«был пилот, показал эффективность»</td><td>источник данных → раздел <code>pilot</code>, грейд A или B−</td></tr>
+      <tr><td>«выдаём по всей стране»</td><td><code>audience.reachable_market</code></td></tr>
+      <tr><td>«партнёры дают скидку»</td><td><b>вопрос</b>: кто платит — банк или партнёр</td></tr>
+      <tr><td>«спецдизайн», «именной пластик»</td><td><code>costs.acq_cost_per_client</code></td></tr>
+      <tr><td>«уникальные привилегии при оплате»</td><td><code>unit_economics.cashback_rate</code></td></tr>
+      <tr><td>«для молодёжи»</td><td><code>audience.segments</code></td></tr>
+      <tr><td>«уже есть похожий продукт»</td><td><code>funnel.cannibalization</code> заметно выше нуля</td></tr>
+    </table>
+  </details>
+
+  <div class="actions">
+    <button name="action" value="save" class="ghost">Сохранить</button>
+    <button name="action" value="next">Дальше — сегменты</button>
+  </div>
+</form>
+
+{# Форма ничего не проверяет и ничего не считает: правила «applied обязан указать параметр»
+   и «ignored обязан назвать причину» живут в движке и применяются на сохранении.
+   Здесь только показ и скрытие полей, чтобы не предлагать заполнить неподходящее. #}
+<script>
+const tbody = document.getElementById('claims');
+
+function refresh(tr) {
+  const st = tr.querySelector('.status').value;
+  tr.querySelectorAll('.f-applied').forEach(el => el.hidden = (st !== 'applied'));
+  tr.querySelectorAll('.f-ignored').forEach(el => el.hidden = (st !== 'ignored'));
+}
+
+function wire(tr) {
+  tr.querySelector('.status').addEventListener('change', () => refresh(tr));
+  tr.querySelector('.del').addEventListener('click', () => { tr.remove(); renumber(); });
+  refresh(tr);
+}
+
+// Индексы должны идти подряд без дыр: сервер читает claim.0, claim.1 … и останавливается
+// на первом пропуске. Удалили строку из середины — всё, что ниже, потерялось бы молча.
+function renumber() {
+  [...tbody.querySelectorAll('tr.claim')].forEach((tr, i) => {
+    tr.dataset.i = i;
+    tr.querySelectorAll('[name]').forEach(el => {
+      el.name = el.name.replace(/^claim\.\d+\./, `claim.${i}.`);
+    });
+  });
+}
+
+document.getElementById('add').addEventListener('click', () => {
+  const first = tbody.querySelector('tr.claim');
+  let tr;
+  if (first) {
+    tr = first.cloneNode(true);
+    tr.querySelectorAll('textarea, input').forEach(el => el.value = '');
+    tr.querySelectorAll('select').forEach(el => el.selectedIndex = 0);
+  } else {
+    tr = document.createElement('tr');
+    tr.className = 'claim';
+    tr.innerHTML = document.getElementById('rowtpl').innerHTML;
+  }
+  tbody.appendChild(tr);
+  renumber();
+  wire(tr);
+});
+
+[...tbody.querySelectorAll('tr.claim')].forEach(wire);
+</script>
+
+<template id="rowtpl">
+  <td><textarea name="claim.0.claim" rows="2" placeholder="цитата из описания"></textarea></td>
+  <td><textarea name="claim.0.implication" rows="2" placeholder="какой параметр это задаёт или что нужно уточнить"></textarea></td>
+  <td><select name="claim.0.status" class="status"><option value="">—</option>
+    {% for s in statuses %}<option value="{{ s }}">{{ {'applied': 'стало параметром', 'question': 'нужен ответ', 'ignored': 'не учитываем'}[s] }}</option>{% endfor %}
+  </select></td>
+  <td>
+    <input name="claim.0.maps_to" placeholder="unit_economics.cashback_rate" class="f-applied">
+    <input name="claim.0.reason" placeholder="почему не учитываем" class="f-ignored">
+  </td>
+  <td><select name="claim.0.grade" class="f-applied"><option value="">—</option>
+    {% for g in grades %}<option value="{{ g }}">{{ g.replace("_minus", "−") }}</option>{% endfor %}
+  </select></td>
+  <td><button type="button" class="ghost del">✕</button></td>
+</template>
+{% endblock %}
