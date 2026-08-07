@@ -9,6 +9,7 @@
 
 Запуск: make web   (или .venv/bin/uvicorn web.app:app --reload)
 """
+import copy
 import hashlib
 import importlib.util
 import json
@@ -47,8 +48,8 @@ ENGINE_VERSION = hashlib.sha256((ROOT / "src" / "calc.py").read_bytes()).hexdige
 INITIATIVE_TYPES = params.TYPE_CHOICES
 PRODUCTS = params.PRODUCTS
 PRODUCT_NAME = params.PRODUCT_NAME
-STEPS = [("brief", "Бриф"), ("segments", "Сегменты"), ("panel", "Панель"),
-         ("assumptions", "Допущения"), ("result", "Результат")]
+STEPS = [("brief", "Бриф"), ("pilot", "Пилот"), ("segments", "Сегменты"),
+         ("panel", "Панель"), ("assumptions", "Допущения"), ("result", "Результат")]
 
 app = FastAPI(title="Калькулятор эффекта инициатив")
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
@@ -403,7 +404,110 @@ async def brief_save(request: Request, iid: int):
     db.update_initiative(con, iid, config=cfg)
     if f.get("action") == "save":
         return RedirectResponse(f"/initiative/{iid}/brief", status_code=303)
+    return RedirectResponse(f"/initiative/{iid}/pilot", status_code=303)
+
+
+# ------------------------------------------------------------------ шаг 3: пилот
+# Параметры, которые прошедший пилот имеет право переопределить. Список берётся
+# из движка, а не переписывается здесь: разойдясь, форма предложила бы задать то,
+# что движок отвергнет строгой валидацией.
+PILOT_METRIC_CHOICES = sorted(calc.PILOT_TARGET)
+PILOT_FLAGS = ("control_group",)
+PILOT_TEXT = ("name", "geography", "rollout_geography", "audience")
+
+
+def form_to_pilot(form, cfg):
+    """Поля формы → раздел `pilot`. Пустая форма убирает раздел целиком."""
+    if not form.get("has_pilot"):
+        cfg.pop("pilot", None)
+        return cfg
+    p = {}
+    for k in PILOT_TEXT:
+        v = (form.get(f"pilot.{k}") or "").strip()
+        if v:
+            p[k] = v
+    for k in PILOT_FLAGS:
+        p[k] = bool(form.get(f"pilot.{k}"))
+    for k in ("sample_size", "control_size", "duration_months",
+              "baseline_rate", "observed_rate", "scale_haircut"):
+        raw = form.get(f"pilot.{k}")
+        if raw not in (None, ""):
+            p[k] = _num(raw)
+    # метрики: строки «параметр → значение», пустые пропускаем
+    metrics, i = {}, 0
+    while any(k.startswith(f"metric.{i}.") for k in form.keys()):
+        key = (form.get(f"metric.{i}.key") or "").strip()
+        raw = form.get(f"metric.{i}.value")
+        if key and raw not in (None, ""):
+            metrics[key] = _num(raw)
+        i += 1
+    if metrics:
+        p["metrics"] = metrics
+    cfg["pilot"] = p
+    return cfg
+
+
+def pilot_checks(cfg):
+    """Три проверки пилота — целиком из движка.
+
+    География, контрольная группа и мощность выборки считаются в `apply_pilot()`.
+    Повторять их здесь значило бы завести третью копию правил: она разойдётся
+    с движком при первой правке, как это уже случилось с флагами.
+    """
+    if not cfg.get("pilot"):
+        return None
+    probe = calc.apply_pilot(copy.deepcopy(cfg))
+    return {"info": probe.get("_pilot"),
+            "notes": [n for n in probe.get("_notes", []) if "ПИЛОТ" in n or "ОТБОР" in n]}
+
+
+@app.get("/initiative/{iid}/pilot", response_class=HTMLResponse)
+def pilot_form(request: Request, iid: int, error: str = ""):
+    init = db.get_initiative(con, iid)
+    cfg = config_of(init)
+    return page(request, "pilot.html", init=init, step="pilot", error=error,
+                pilot=cfg.get("pilot") or {}, checks=pilot_checks(cfg),
+                metric_choices=PILOT_METRIC_CHOICES,
+                metric_labels={p.key: p.label for p in params.ALL})
+
+
+@app.post("/initiative/{iid}/pilot")
+async def pilot_save(request: Request, iid: int):
+    f = await request.form()
+    init = db.get_initiative(con, iid)
+    cfg = form_to_pilot(f, config_of(init))
+    try:
+        calc.validate_config(cfg)
+    except calc.ConfigError as e:
+        only = [ln for ln in str(e).splitlines() if "pilot" in ln]
+        db.update_initiative(con, iid, config=cfg)
+        return RedirectResponse(
+            f"/initiative/{iid}/pilot?error=" + quote("\n".join(only) or str(e)),
+            status_code=303)
+    db.update_initiative(con, iid, config=cfg)
+    if f.get("action") == "save":
+        return RedirectResponse(f"/initiative/{iid}/pilot", status_code=303)
     return RedirectResponse(f"/initiative/{iid}/segments", status_code=303)
+
+
+@app.post("/api/pilot/preview")
+async def api_pilot_preview(request: Request):
+    """Мощность выборки и грейд переноса — до сохранения, пока человек ещё правит.
+
+    «Пилот на 800 человек не докажет 3 п.п.» должно появляться в момент ввода,
+    а не после того, как на этих цифрах уже построили вердикт.
+    """
+    body = await request.json()
+    probe = params.defaults()
+    probe["pilot"] = {k: v for k, v in (body.get("pilot") or {}).items() if v not in (None, "")}
+    try:
+        calc.validate_config(probe)
+    except calc.ConfigError as e:
+        return JSONResponse({"errors": [ln.strip(" -") for ln in str(e).splitlines()[1:]]})
+    out = calc.apply_pilot(probe)
+    return JSONResponse({"info": out.get("_pilot"), "errors": [],
+                         "notes": [n for n in out.get("_notes", [])
+                                   if "ПИЛОТ" in n or "ОТБОР" in n]})
 
 
 @app.get("/initiative/{iid}/segments", response_class=HTMLResponse)

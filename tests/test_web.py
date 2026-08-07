@@ -247,6 +247,68 @@ r = client.get(f"/initiative/{iid}/brief")
 check("Открытые вопросы и неучтённое видны на странице",
       "1" in r.text and "Разобрано" in r.text)
 
+# ---------------------------------------------------------------- 2б. Шаг «Пилот»
+# Пилот, который провели и не использовали в расчёте, — выброшенные деньги. Раньше
+# задать его цифры через веб было нельзя вовсе, только конфигом.
+r = client.get(f"/initiative/{iid}/pilot")
+check("Шаг «Пилот» открывается", r.status_code == 200 and "Пилот уже проводился" in r.text)
+
+r = client.post(f"/initiative/{iid}/pilot", data={"action": "save"}, follow_redirects=False)
+_cfg = json.loads(_db.get_initiative(app_mod.con, iid)["config_json"])
+check("Без галочки раздел пилота не создаётся", "pilot" not in _cfg,
+      "инициатива без пилота не должна тащить пустой блок в конфиг")
+
+r = client.post(f"/initiative/{iid}/pilot", data={
+    "has_pilot": "on", "pilot.name": "Пилот в Москве",
+    "pilot.geography": "Москва", "pilot.rollout_geography": "РФ",
+    "pilot.control_group": "on",
+    "pilot.sample_size": "40000", "pilot.control_size": "40000",
+    "pilot.baseline_rate": "0,52", "pilot.observed_rate": "0,61",
+    "pilot.scale_haircut": "0,75",
+    "metric.0.key": "activation_rate", "metric.0.value": "0,61",
+    "metric.1.key": "monthly_turnover", "metric.1.value": "34000",
+    "metric.2.key": "approval_rate", "metric.2.value": "",     # пустое не сохраняется
+    "action": "save"}, follow_redirects=False)
+check("Пилот сохраняется", r.status_code == 303 and "error=" not in r.headers["location"])
+
+_cfg = json.loads(_db.get_initiative(app_mod.con, iid)["config_json"])
+check("Метрики пилота легли в конфиг",
+      _cfg["pilot"]["metrics"] == {"activation_rate": 0.61, "monthly_turnover": 34000.0})
+check("Пустая метрика не сохранилась", "approval_rate" not in _cfg["pilot"]["metrics"])
+check("Русская запятая разобрана и в полях пилота", _cfg["pilot"]["baseline_rate"] == 0.52)
+
+_probe = calc.apply_pilot(json.loads(json.dumps(_cfg)))
+check("География Москва → РФ понижает грейд до B−", _probe["_pilot"]["grade"] == "B_minus")
+check("Мощность выборки считает движок: 9 п.п. на 40 000 доказуемы",
+      _probe["_pilot"]["power"]["conclusive"] is True)
+check("Коэффициент переноса режет прирост, а не уровень",
+      abs(_probe["funnel"]["activation_rate"] - (0.65 + (0.61 - 0.65) * 0.75)) < 1e-9,
+      f'получилось {_probe["funnel"]["activation_rate"]}')
+
+r = client.get(f"/initiative/{iid}/pilot")
+check("Проверки движка видны на странице",
+      "Грейд переноса" in r.text and "B−" in r.text)
+
+# живая проверка до сохранения — на маленькой выборке пилот ничего не доказывает
+r = client.post("/api/pilot/preview", json={"pilot": {
+    "geography": "Москва", "rollout_geography": "РФ", "control_group": True,
+    "sample_size": 800, "control_size": 800,
+    "baseline_rate": 0.52, "observed_rate": 0.55}})
+_pw = r.json()["info"]["power"]
+check("Предпросмотр ловит недостаточную выборку: 3 п.п. на 800 неразличимы",
+      _pw["conclusive"] is False and _pw["min_detectable"] > _pw["observed_uplift"])
+check("Предпросмотр объясняет, сколько нужно было на группу",
+      any("на группу" in n for n in r.json()["notes"]))
+
+# конфиг, который движок не примет, не должен молча сохраняться как валидный
+r = client.post("/api/pilot/preview", json={"pilot": {"baseline_rate": 52}})
+check("Предпросмотр отдаёт ошибку валидации, а не считает по мусору",
+      bool(r.json().get("errors")))
+
+client.post(f"/initiative/{iid}/pilot", data={"action": "save"}, follow_redirects=False)
+check("Снятая галочка убирает пилот из конфига",
+      "pilot" not in json.loads(_db.get_initiative(app_mod.con, iid)["config_json"]))
+
 # httpx отправляет повторяющиеся поля только словарём со списком; список кортежей молча теряется
 r = client.post(f"/initiative/{iid}/segments", data={
     "segments": ["kids", "teens", "youth"],

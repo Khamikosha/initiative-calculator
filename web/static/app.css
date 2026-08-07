@@ -232,3 +232,13 @@ table.claims .del { padding: .2rem .5rem; line-height: 1; }
 table.hints { border-collapse: collapse; margin-top: .5rem; font-size: .9rem; }
 table.hints td { padding: .2rem 1.2rem .2rem 0; vertical-align: top; }
 table.hints td:first-child { color: var(--muted); white-space: nowrap; }
+
+/* ------------------------------------------------------------------ шаг «Пилот» */
+.toggle { display: flex; align-items: center; gap: .5rem; margin: .6rem 0; cursor: pointer; }
+.toggle input { width: auto; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1.2rem; margin: .6rem 0; }
+.grid2 label { display: flex; flex-direction: column; gap: .2rem; font-size: .9rem; }
+@media (max-width: 700px) { .grid2 { grid-template-columns: 1fr; } }
+/* Блок скрывается целиком, когда пилота не было: пустые поля не должны намекать,
+   что их надо заполнить. */
+#pilotbody[hidden], #checkscard[hidden] { display: none; }

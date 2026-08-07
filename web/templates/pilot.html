@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Пилот</h1>
+<p class="lead">Если пилот уже был — это <b>источник данных</b>, а не тип инициативы.
+Его цифры заменяют бенчмарки на факт и поднимают грейд, а значит двигают индекс
+уверенности и вердикт. <b>Пилот, который провели и не использовали в расчёте, —
+это выброшенные деньги.</b></p>
+
+{% if error %}
+<div class="callout bad">
+  <b>Движок не принял пилот:</b>
+  <ul>{% for line in error.split("\n") %}<li>{{ line.lstrip("- ") }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" class="card" id="pilotform" autocomplete="off">
+  <label class="toggle">
+    <input type="checkbox" name="has_pilot" id="has_pilot" {{ 'checked' if pilot }}>
+    <b>Пилот уже проводился</b>
+  </label>
+
+  <div id="pilotbody" {{ 'hidden' if not pilot }}>
+    <h2>Что за пилот</h2>
+    <div class="grid2">
+      <label>Название
+        <input name="pilot.name" value="{{ pilot.name or '' }}" placeholder="Пилот в Москве"></label>
+      <label>Аудитория пилота
+        <input name="pilot.audience" value="{{ pilot.audience or '' }}"
+               placeholder="действующая база, отклик на in-app"></label>
+      <label>География пилота
+        <input name="pilot.geography" value="{{ pilot.geography or '' }}" placeholder="Москва"></label>
+      <label>География раскатки
+        <input name="pilot.rollout_geography" value="{{ pilot.rollout_geography or '' }}"
+               placeholder="РФ"></label>
+    </div>
+    <p class="hint">Если география раскатки шире пилотной, движок сам понижает грейд
+    до B−: это тот же перенос с чужого рынка, только внутри страны.</p>
+
+    <h2>Дизайн замера</h2>
+    <label class="toggle">
+      <input type="checkbox" name="pilot.control_group" id="ctrl"
+             {{ 'checked' if pilot.control_group }}>
+      Была контрольная группа
+    </label>
+    <p class="hint">Без неё «показал эффективность» означает «мы что-то сделали,
+    и что-то произошло». Все цифры такого пилота — грейд C.</p>
+
+    <div class="grid2">
+      <label>Размер тестовой группы, чел
+        <input name="pilot.sample_size" value="{{ pilot.sample_size or '' }}" inputmode="numeric"></label>
+      <label>Размер контрольной группы, чел
+        <input name="pilot.control_size" value="{{ pilot.control_size or '' }}" inputmode="numeric"></label>
+      <label>Конверсия контроля, долей
+        <input name="pilot.baseline_rate" value="{{ pilot.baseline_rate or '' }}"
+               placeholder="0.52"></label>
+      <label>Конверсия теста, долей
+        <input name="pilot.observed_rate" value="{{ pilot.observed_rate or '' }}"
+               placeholder="0.61"></label>
+      <label>Длительность, мес
+        <input name="pilot.duration_months" value="{{ pilot.duration_months or '' }}"></label>
+      <label>Коэффициент переноса на масштаб
+        <input name="pilot.scale_haircut" value="{{ pilot.scale_haircut or '' }}"
+               placeholder="0.75"></label>
+    </div>
+    <p class="hint">Коэффициент режет <b>прирост</b>, а не уровень: пилот дал 61% при
+    заложенных 55% и коэффициенте 0,75 → 59,5%. Единица означает перенос один к одному —
+    это допущение, а не его отсутствие.</p>
+
+    <h2>Что пилот измерил</h2>
+    <p class="hint">Каждая строка заменяет параметр модели фактом пилота. Пустая строка
+    игнорируется.</p>
+    <table class="claims">
+      <thead><tr><th style="width:55%">Параметр</th><th style="width:35%">Значение по пилоту</th><th></th></tr></thead>
+      <tbody id="metrics">
+        {% for key, val in (pilot.metrics or {}).items() %}
+        <tr class="metric">
+          <td>
+            <select name="metric.{{ loop.index0 }}.key">
+              {% for k in metric_choices %}
+              <option value="{{ k }}" {{ 'selected' if k == key }}>
+                {{ metric_labels.get(k, k) }} <small>({{ k }})</small>
+              </option>
+              {% endfor %}
+            </select>
+          </td>
+          <td><input name="metric.{{ loop.index0 }}.value" value="{{ val }}"></td>
+          <td><button type="button" class="ghost del">✕</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><button type="button" class="ghost" id="addmetric">+ Показатель</button></p>
+  </div>
+
+  <div class="actions">
+    <button name="action" value="save" class="ghost">Сохранить</button>
+    <button name="action" value="next">Дальше — сегменты</button>
+  </div>
+</form>
+
+<div class="card" id="checkscard" {{ 'hidden' if not checks }}>
+  <h2>Что говорит движок</h2>
+  <div id="checks">
+    {% if checks %}
+      {% if checks.info %}
+      <table class="grid">
+        <tr><td>Грейд переноса</td><td><b>{{ checks.info.grade.replace("_minus", "−") }}</b></td></tr>
+        <tr><td>Контрольная группа</td>
+            <td>{{ 'есть' if checks.info.control_group else 'НЕТ — цифры недоказуемы' }}</td></tr>
+        {% if checks.info.power %}
+        <tr><td>Доказательность</td>
+            <td>прирост {{ checks.info.power.observed_uplift | pct }} против различимого
+                {{ checks.info.power.min_detectable | pct }} при
+                {{ checks.info.power.n_per_group | num }} на группу —
+                <b>{{ 'доказан' if checks.info.power.conclusive else 'НЕ ДОКАЗАН' }}</b></td></tr>
+        {% endif %}
+        {% for a in checks.info.applied %}
+        <tr><td>{{ a.param }}</td>
+            <td>{{ a.previous if a.previous is not none else '—' }} → <b>{{ a.applied_value | round(4) }}</b></td></tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+      {% for n in checks.notes %}<p class="callout">{{ n }}</p>{% endfor %}
+    {% endif %}
+  </div>
+</div>
+
+{# Ни одной формулы здесь нет: мощность выборки и грейд считает движок по /api/pilot/preview.
+   Третья копия правил разошлась бы с движком и книгой при первой же правке. #}
+<script>
+const body = document.getElementById('pilotbody');
+const has = document.getElementById('has_pilot');
+const metrics = document.getElementById('metrics');
+const CHOICES = {{ metric_choices | tojson }};
+const LABELS = {{ metric_labels | tojson }};
+
+has.addEventListener('change', () => { body.hidden = !has.checked; preview(); });
+
+function renumber() {
+  [...metrics.querySelectorAll('tr.metric')].forEach((tr, i) => {
+    tr.querySelectorAll('[name]').forEach(el => {
+      el.name = el.name.replace(/^metric\.\d+\./, `metric.${i}.`);
+    });
+  });
+}
+
+function wireRow(tr) {
+  tr.querySelector('.del').addEventListener('click', () => { tr.remove(); renumber(); });
+}
+
+document.getElementById('addmetric').addEventListener('click', () => {
+  const tr = document.createElement('tr');
+  tr.className = 'metric';
+  const opts = CHOICES.map(k => `<option value="${k}">${LABELS[k] || k} (${k})</option>`).join('');
+  tr.innerHTML = `<td><select name="metric.0.key">${opts}</select></td>
+                  <td><input name="metric.0.value"></td>
+                  <td><button type="button" class="ghost del">✕</button></td>`;
+  metrics.appendChild(tr);
+  renumber();
+  wireRow(tr);
+});
+
+[...metrics.querySelectorAll('tr.metric')].forEach(wireRow);
+
+// Живая проверка: «пилот на 800 человек не докажет 3 п.п.» должно появляться в момент
+// ввода, а не после того, как на этих цифрах уже построили вердикт.
+let timer = null;
+async function preview() {
+  const card = document.getElementById('checkscard');
+  if (!has.checked) { card.hidden = true; return; }
+  const p = {};
+  document.querySelectorAll('[name^="pilot."]').forEach(el => {
+    const k = el.name.slice(6);
+    if (el.type === 'checkbox') p[k] = el.checked;
+    else if (el.value.trim()) p[k] = isNaN(el.value.replace(',', '.')) ? el.value.trim()
+                                                                      : Number(el.value.replace(',', '.'));
+  });
+  const r = await fetch('/api/pilot/preview', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({pilot: p})});
+  const d = await r.json();
+  const box = document.getElementById('checks');
+  if (d.errors && d.errors.length) {
+    box.innerHTML = '<p class="callout bad">' + d.errors.join('<br>') + '</p>';
+  } else {
+    const i = d.info || {};
+    let html = '<table class="grid">';
+    html += `<tr><td>Грейд переноса</td><td><b>${(i.grade || '—').replace('_minus', '−')}</b></td></tr>`;
+    html += `<tr><td>Контрольная группа</td><td>${i.control_group ? 'есть' : 'НЕТ — цифры недоказуемы'}</td></tr>`;
+    if (i.power) {
+      html += `<tr><td>Доказательность</td><td>прирост ${(i.power.observed_uplift*100).toFixed(1)}%`
+            + ` против различимого ${(i.power.min_detectable*100).toFixed(1)}%`
+            + ` при ${i.power.n_per_group.toLocaleString('ru')} на группу — `
+            + `<b>${i.power.conclusive ? 'доказан' : 'НЕ ДОКАЗАН'}</b></td></tr>`;
+    }
+    html += '</table>';
+    (d.notes || []).forEach(n => { html += `<p class="callout">${n}</p>`; });
+    box.innerHTML = html;
+  }
+  card.hidden = false;
+}
+
+document.getElementById('pilotform').addEventListener('input', () => {
+  clearTimeout(timer); timer = setTimeout(preview, 400);
+});
+document.getElementById('pilotform').addEventListener('change', preview);
+</script>
+{% endblock %}
