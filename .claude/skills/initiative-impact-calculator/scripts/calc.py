@@ -234,6 +234,7 @@ SCHEMA = {
     "natural_effect": None,     # вложенные объекты: parts и adjustments
     "base_activation": {
         "name": None, "eligible_clients": (0.0, 2e9), "reach_share": _RATE,
+        "technically_reachable": _RATE, "parts": None,
         "workout_months": (0.0, 600.0), "monthly_inflow": (0.0, 1e9),
         "uplift_rate": _RATE, "measured_against_control": None,
         "turnover_before": (0.0, 1e9), "turnover_after": (0.0, 1e9),
@@ -271,7 +272,7 @@ LINKED_KEYS = {"name": None, "clients_per_linked": (0.01, 100.0),
                "income_annual": (0.0, 1e10), "margin_rate": _RATE,
                "attribution_share": _RATE, "sources": None,
                "churn_annual": _RATE, "churn_reduction": _RATE,
-               "cross_sell_uplift": (0.0, 2.0)}
+               "selection_haircut": _RATE, "cross_sell_uplift": (0.0, 2.0)}
 # Откуда берётся связанный клиент. Доли ОДНОГО плана, в сумме 1.0 — а не три
 # независимых плана: независимые не сходятся и дают отрицательных «новых».
 LINKED_SOURCE_KEYS = {"own_base": _RATE, "reactivated": _RATE, "new": _RATE}
@@ -493,9 +494,33 @@ def validate_config(cfg):
                 errs.append(f"pilot.{b}: заявлена контрольная группа, но её размер не задан — "
                             "без него нельзя проверить, мог ли пилот вообще поймать эффект.")
 
+    for _sec in ("natural_effect", "base_activation"):
+        _blk = cfg.get(_sec)
+        if not isinstance(_blk, dict):
+            continue
+        _prts = _blk.get("parts")
+        if _prts is None:
+            continue
+        if not isinstance(_prts, list):
+            errs.append(f"{_sec}.parts: должен быть списком частей базы.")
+            continue
+        _tot = 0.0
+        for i, pt in enumerate(_prts):
+            if not isinstance(pt, dict):
+                errs.append(f"{_sec}.parts[{i}]: должен быть объектом.")
+                continue
+            _check_keys(pt, NATURAL_PART_KEYS, f"{_sec}.parts[{i}]", errs)
+            v = pt.get("share")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                _tot += v
+        if _prts and abs(_tot - 1.0) > 0.005:
+            errs.append(
+                f"{_sec}.parts: доли частей базы в сумме дают {_tot:.3f}, а должны 1.0. "
+                "Недостающая часть базы молча не даёт эффекта, а лишняя даёт его дважды.")
+
     ne = cfg.get("natural_effect")
     if isinstance(ne, dict):
-        prts = ne.get("parts")
+        prts = None
         if prts is not None:
             if not isinstance(prts, list):
                 errs.append("natural_effect.parts: должен быть списком частей базы.")
@@ -964,11 +989,31 @@ def base_activation_stream(cfg, shape, u):
     # выглядел источником 2 206 спасений ЕЖЕМЕСЯЧНО, хотя при таком темпе базы
     # хватило бы на 892 месяца. Реально это 2 206 один раз плюс 112 в месяц —
     # инициатива про постоянный сервис, а не про разовую проработку базы.
-    conv = g(b, "reach_share") * g(b, "uplift_rate") * g(b, "attribution_share", 1.0)
-    stock_total = g(b, "eligible_clients") * conv
-    flow_monthly = g(b, "monthly_inflow") * conv
+    # Техническая достижимость — НЕ конверсия. «Есть приложение и не в стоп-листе» —
+    # физическая возможность доставить сообщение; «дотянулись» — сколько из доступных
+    # реально охватили. Слитые в один множитель, они прячут, где именно теряется база:
+    # 70% в живом ФЭО были достижимостью, а не откликом, и лечатся они разным.
+    tech = g(b, "technically_reachable", 1.0)
+    attr = g(b, "attribution_share", 1.0)
+    reach = g(b, "reach_share")
+    uplift = g(b, "uplift_rate")
+    parts = b.get("parts") or []
+
+    def _affected(base):
+        """Сколько клиентов сменит поведение. База неоднородна: спящий месяц
+        и спящий год откликаются по-разному, и в глубокой части эффект близок к нулю."""
+        if not parts:
+            return base * tech * reach * uplift * attr
+        return sum(base * g(p, "share") * tech * reach
+                   * min(uplift, g(p, "uplift_cap", 1.0)) * attr for p in parts)
+
+    stock_total = _affected(g(b, "eligible_clients"))
+    flow_monthly = _affected(g(b, "monthly_inflow"))
     if stock_total <= 0 and flow_monthly <= 0:
         return None
+    # сквозная конверсия «на одного человека базы» — для экономики контакта
+    base_ref = g(b, "eligible_clients") or g(b, "monthly_inflow")
+    conv = ((stock_total or flow_monthly) / base_ref) if base_ref else 0.0
 
     d_turn = g(b, "turnover_after") - g(b, "turnover_before")
     d_bal = g(b, "balance_after") - g(b, "balance_before")
@@ -1029,6 +1074,7 @@ def linked_stream(cfg, active):
     src = l.get("sources") or {}
     share_acq = g(src, "new") + g(src, "reactivated") if src else 1.0
     churn_m, red = g(l, "churn_annual") / 12.0, g(l, "churn_reduction")
+    sel = g(l, "selection_haircut", 1.0)
     xsell = g(l, "cross_sell_uplift")
     # Удержание ОТКЛАДЫВАЕТ уход, а не отменяет его. Раньше `retained` только рос:
     # связанный клиент, удержанный на первом месяце, приносил полный доход все
@@ -1040,7 +1086,12 @@ def linked_stream(cfg, active):
         linked = act / per
         retained = retained * (1 - churn_m) + linked * churn_m * red
         acq_inc = linked * share_acq * inc_m * attr
-        ret_inc = retained * inc_m
+        # ПОПРАВКА НА ОТБОР. `income_annual` — средний ОД связанного клиента, но
+        # удержанный отобран по признаку: он собирался уйти, то есть по определению
+        # вовлечён хуже среднего. Применять к нему среднюю ценность значит завышать.
+        # Тот же довод, что и к NPV нового клиента, приложенному к уходящему:
+        # уходящие — худшая часть базы, а не случайная выборка из неё.
+        ret_inc = retained * inc_m * sel
         xs_inc = linked * inc_m * xsell
         rows.append({"linked_clients": linked, "retained_cum": retained,
                      "income_acquisition": acq_inc * mr, "income_retention": ret_inc * mr,
@@ -1598,6 +1649,12 @@ def validate_extensions(cfg, f, pl):
                        "операционный доход целиком засчитан как маржа. ОД не вычитает "
                        "стоимость фондирования, обслуживание и риск — эффект завышен. "
                        "Задайте margin_rate долей маржи в ОД.")
+        if g(lc, "selection_haircut", 1.0) >= 1.0 and g(lc, "churn_reduction"):
+            out.append(
+                "ПОПРАВКА НА ОТБОР НЕ ЗАДАНА: удержанному связанному клиенту засчитан "
+                "средний ОД. Но он отобран по признаку — собирался уйти, значит вовлечён "
+                "хуже среднего по определению. Средняя ценность, приложенная к худшей "
+                "части базы, завышает эффект удержания. Задайте selection_haircut.")
         if g(lc, "attribution_share", 1.0) >= 1.0 and (lc.get("sources") or {}).get("new"):
             out.append("АТРИБУЦИЯ 100%: весь ОД новых связанных клиентов приписан инициативе. "
                        "Часть из них пришла бы и без неё — задайте attribution_share.")
@@ -1671,6 +1728,18 @@ def validate_extensions(cfg, f, pl):
                 "прочими активностями. Без контроля вы приписываете инициативе чужой "
                 "прирост, и проверить это уже нечем. Все цифры блока — грейд C, "
                 "а вердикт по ним принимать нельзя.")
+        if g(ba, "technically_reachable", 1.0) >= 1.0:
+            out.append(
+                "ДОСТИЖИМОСТЬ НЕ ЗАДАНА: technically_reachable = 1, то есть предполагается, "
+                "что сообщение дойдёт до всей базы. У части нет приложения, часть в стоп-листе. "
+                "Это не конверсия, а физическая возможность доставить — и лечится она "
+                "совсем не тем, чем низкий отклик.")
+        if not (ba.get("parts") or []):
+            out.append(
+                "СПЯЩАЯ БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ: один uplift_rate на всех. Спящий месяц "
+                "и спящий год откликаются по-разному, и в глубокой части эффект близок "
+                "к нулю. Разложите базу на parts с потолками — иначе весь эффект "
+                "приписывается тем, у кого его нет.")
         if g(ba, "decay_months") <= 0:
             out.append(
                 "ЭФФЕКТ БЕЗ ЗАТУХАНИЯ: decay_months = 0, то есть проснувшийся клиент "

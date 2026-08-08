@@ -615,6 +615,61 @@ check("Предельный CPA считается от LTV и нормы LTV/CA
       abs(_p["max_cpa"] - _p["ltv_per_client"] / _p["hurdle_ltv_cac"]) <= 1)
 check("Бюджет, который выдерживает экономика, выводится, а не спрашивается",
       _p["budget_at_max_cpa"] is not None and _p["budget_at_max_cpa"] > 0)
+def _config_error(cfg, needle):
+    """Движок обязан ОТВЕРГНУТЬ конфиг с этой ошибкой, а не посчитать по нему."""
+    try:
+        calc.validate_config(copy.deepcopy(cfg))
+        return False
+    except calc.ConfigError as e:
+        return needle in str(e)
+
+
+# --- достижимость, части базы и поправка на отбор --------------------------------
+# Три поправки из разбора живых ФЭО: техническая достижимость — не конверсия;
+# спящая база неоднородна; средняя ценность не применяется к отобранной подвыборке.
+_tr = copy.deepcopy(_sf)
+_tr["base_activation"]["technically_reachable"] = 0.7
+_r_tr = calc.analyze(calc.resolve_segments(calc.normalize(_tr)))
+check("Техническая достижимость режет базу отдельным множителем",
+      abs(_r_tr["pl"]["base_activation"]["activated_from_stock"]
+          - _r_sf["pl"]["base_activation"]["activated_from_stock"] * 0.7) < 1)
+check("Отсутствие достижимости помечается — теряется не отклик, а доставка",
+      any("ДОСТИЖИМОСТЬ НЕ ЗАДАНА" in m for m in _r_sf["validation"]))
+
+_pt = copy.deepcopy(_sf)
+_pt["base_activation"]["parts"] = [
+    {"name": "спят < 3 мес", "share": 0.4, "uplift_cap": 0.10},
+    {"name": "спят > 12 мес", "share": 0.6, "uplift_cap": 0.002}]
+_r_pt = calc.analyze(calc.resolve_segments(calc.normalize(_pt)))
+# 1 млн × 0,7 × (0,4×0,01 + 0,6×0,002) = 1 млн × 0,7 × 0,0052
+check("Потолок по частям базы применяется и к растранзачиванию",
+      abs(_r_pt["pl"]["base_activation"]["activated_from_stock"]
+          - 1_000_000 * 0.7 * (0.4 * 0.01 + 0.6 * 0.002)) < 1,
+      f'{_r_pt["pl"]["base_activation"]["activated_from_stock"]:,.0f}')
+check("Однородная спящая база помечается",
+      any("СПЯЩАЯ БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ" in m for m in _r_sf["validation"]))
+check("Доли частей базы обязаны давать единицу и здесь тоже",
+      _config_error(dict(_pt, base_activation=dict(
+          _pt["base_activation"],
+          parts=[{"name": "a", "share": 0.4, "uplift_cap": 0.1}])), "parts"))
+
+
+def _linked_retention_income(haircut):
+    cfg = {"linked_client": {"clients_per_linked": 1, "income_annual": 12000,
+                             "attribution_share": 0, "cross_sell_uplift": 0,
+                             "churn_annual": 0.24, "churn_reduction": 1.0,
+                             "selection_haircut": haircut}}
+    return sum(r["income_retention"] for r in calc.linked_stream(cfg, [100_000.0] * 24))
+
+
+check("Поправка на отбор режет доход от удержания пропорционально",
+      abs(_linked_retention_income(0.6) - _linked_retention_income(1.0) * 0.6) < 1,
+      "уходящий вовлечён хуже среднего — средняя ценность к нему неприменима")
+check("Отсутствие поправки на отбор помечается",
+      any("ПОПРАВКА НА ОТБОР" in m for m in calc.analyze(calc.resolve_segments(
+          json.loads((CASES / "kids_card_uzbekistan.json").read_text(encoding="utf-8"))
+      ))["validation"]))
+
 # --- натуральный эффект: что меряем ≠ сколько это денег -------------------------
 # На живом ФЭО «снижение просрочки на 3,65 млрд ₽» стояло в итоге как эффект.
 # Реальные деньги — высвобожденный резерв минус цена инструментов помощи.
