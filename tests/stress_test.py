@@ -615,6 +615,67 @@ check("Предельный CPA считается от LTV и нормы LTV/CA
       abs(_p["max_cpa"] - _p["ltv_per_client"] / _p["hurdle_ltv_cac"]) <= 1)
 check("Бюджет, который выдерживает экономика, выводится, а не спрашивается",
       _p["budget_at_max_cpa"] is not None and _p["budget_at_max_cpa"] > 0)
+# --- натуральный эффект: что меряем ≠ сколько это денег -------------------------
+# На живом ФЭО «снижение просрочки на 3,65 млрд ₽» стояло в итоге как эффект.
+# Реальные деньги — высвобожденный резерв минус цена инструментов помощи.
+_nat = {
+    "meta": {"name": "натуральный эффект", "type": "product_launch", "horizon_months": 12},
+    "audience": {"target_size": 1000},
+    "natural_effect": {
+        "name": "Снижение просрочки", "unit": "₽ долга",
+        "baseline": 1_000_000_000, "workout_months": 6, "monthly_inflow": 0,
+        "uplift_rate": 0.10, "measured_against_control": "тест против контроля",
+        "parts": [{"name": "ранние", "share": 0.4, "uplift_cap": 0.10, "monetization": 0.20},
+                  {"name": "поздние", "share": 0.6, "uplift_cap": 0.02, "monetization": 0.80}],
+        "adjustments": [{"name": "недополученный процент", "rate": -0.10}]},
+    "unit_economics": {"monthly_churn": 0.02}, "funnel": {},
+    "costs": {"campaign_months": 6}, "rice": {"hurdle_ltv_cac": 3.0},
+}
+_r_nat = calc.analyze(calc.resolve_segments(calc.normalize(copy.deepcopy(_nat))))
+_n = _r_nat["pl"]["natural_effect"]
+# ранние: 1 млрд × 0,4 × 0,10 = 40 млн;  поздние: 1 млрд × 0,6 × 0,02 = 12 млн
+check("Потолок эффекта режет базу по частям, а не применяется ко всей",
+      abs(_n["natural_total"] - 52_000_000) < 1,
+      f'{_n["natural_total"]:,.0f} вместо 100 млн при однородной базе')
+# в выводе ставки округлены до 4 знаков — сверяем с той же точностью
+check("Ставка перевода взвешивается по частям базы",
+      abs(_n["monetization_rate"] - round((40e6 * 0.20 + 12e6 * 0.80) / 52e6, 4)) < 1e-9,
+      f'{_n["monetization_rate"]}')
+check("Вычеты уменьшают перевод, а не натуральную величину",
+      abs(_n["net_rate"] - (_n["monetization_rate"] - 0.10)) < 1e-6)
+check("Натуральная величина и деньги — разные поля, их не перепутать",
+      _n["natural_total"] != _n["money_total"] and
+      abs(_n["money_total"] - _n["natural_total"] * _n["net_rate"]) < 5_000,
+      f'{_n["natural_total"]:,} натуральных → {_n["money_total"]:,} ₽')
+check("Разделение натурального и денежного доносится словами",
+      any("НЕ деньги банка" in m for m in _r_nat["validation"]))
+
+_nat_naive = copy.deepcopy(_nat)
+_nat_naive["natural_effect"].pop("parts")
+_nat_naive["natural_effect"].pop("adjustments")
+_nat_naive["natural_effect"].pop("measured_against_control")
+_r_naive = calc.analyze(calc.resolve_segments(calc.normalize(_nat_naive)))
+check("Ставка перевода 1:1 помечается — именно здесь ФЭО завышают в разы",
+      any("СТАВКА ПЕРЕВОДА НЕ ЗАДАНА" in m for m in _r_naive["validation"]))
+check("Пустой список вычетов помечается: инструмент помощи не бесплатен",
+      any("ВЫЧЕТОВ НЕТ" in m for m in _r_naive["validation"]))
+check("Однородная база помечается: эффект возможен не везде",
+      any("БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ" in m for m in _r_naive["validation"]))
+check("Отсутствие контроля понижает доверие к блоку",
+      any("БЕЗ КОНТРОЛЯ" in m for m in _r_naive["validation"]))
+
+# Проверка «есть ли эффект» обязана видеть ЛЮБОЙ источник маржи, а не список руками.
+# Уже подводило: добавили натуральный эффект, забыли дописать — прогон с NPV +308 млн
+# получил вердикт «нечего считать».
+check("Инициатива на одном натуральном эффекте не объявляется пустым прогоном",
+      _r_nat["verdict"].get("nothing_to_calculate") is not True and
+      _r_nat["funnel"]["incremental_clients"] == 0,
+      f'вердикт: {_r_nat["verdict"]["recommendation"][:50]}')
+check("Проверка эффекта выводится из margin_sources, а не из перечня",
+      calc.has_effect_beyond_acquisition(
+          {"margin_sources": {"own_product": 0, "будущий_блок": 1}}) is True,
+      "любой новый источник попадает под проверку сам")
+
 check("Норма LTV/CAC берётся из конфига, а не зашита",
       calc.analyze(calc.resolve_segments(
           dict(json.loads((CASES / "frk1_debit_card.json").read_text(encoding="utf-8")),

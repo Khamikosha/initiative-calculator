@@ -34,6 +34,7 @@ BOOK_UNSUPPORTED = {
     "companion":       "продукт-спутник",
     "partner":         "P&L партнёра",
     "base_activation": "растранзачивание своей базы",
+    "natural_effect":  "натуральный эффект и его перевод в деньги",
 }
 _raw = json.loads(CASE.read_text(encoding="utf-8"))
 _missing = {k: v for k, v in BOOK_UNSUPPORTED.items() if _raw.get(k)}

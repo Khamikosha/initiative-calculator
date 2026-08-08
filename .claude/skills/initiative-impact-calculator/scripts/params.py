@@ -681,6 +681,8 @@ NESTED_SECTIONS = {
     "linked_client": ("Связанный клиент: кто платит вместо носителя продукта", calc.LINKED_KEYS),
     "companion": ("Продукт-спутник на той же базе", calc.COMPANION_KEYS),
     "partner": ("P&L партнёра на той же клиентской базе", calc.PARTNER_KEYS),
+    "natural_effect": ("Натуральный эффект и его перевод в деньги банка",
+                       calc.NATURAL_KEYS),
 }
 
 ALL = [p for _, _, ps in SECTIONS for p in ps]

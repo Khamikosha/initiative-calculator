@@ -112,7 +112,7 @@
 {% endif %}
 
 {% set ms = pl.margin_sources %}
-{% if ms and (ms.companion or ms.linked_client or ms.base_activation) %}
+{% if ms and (ms.companion or ms.linked_client or ms.base_activation or ms.natural_effect) %}
 <section class="card">
   <h3>Откуда маржа</h3>
   <p class="muted">Носитель продукта и источник денег — часто разные вещи. Если больше
@@ -122,7 +122,8 @@
     {% for key, label in [("own_product", "Сам продукт"),
                           ("companion", "Продукт-спутник"),
                           ("linked_client", "Связанный клиент"),
-                          ("base_activation", "Растранзачивание базы")] %}
+                          ("base_activation", "Растранзачивание базы"),
+                          ("natural_effect", "Натуральный эффект")] %}
       {% if ms[key] %}
       <tr><td>{{ label }}</td><td class="r">{{ ms[key] | mln(CUR) }}</td>
           <td class="r">{% if ms.shares %}{{ ms.shares[key] | pct(0) }}{% else %}—{% endif %}</td></tr>
@@ -187,6 +188,29 @@
   поток {{ ba.margin_from_flow | mln(CUR) }} за горизонт. Растранзаченные
   <b>не идут ни в АКБ, ни в инкремент</b> — они уже в базе, иначе один человек
   посчитался бы дважды.</small>
+</section>
+{% endif %}
+
+{% if pl.natural_effect %}
+{% set ne = pl.natural_effect %}
+<section class="card">
+  <h3>{{ ne.name }}</h3>
+  <p class="muted">То, чем инициатива меряется, и то, сколько это денег банка, —
+  разные величины. Подстановка натуральной в итог завышает эффект в разы.</p>
+  <table class="grid">
+    <tr><td>Натуральный эффект</td>
+        <td class="r"><b>{{ ne.natural_total | num }}</b> {{ ne.unit }}</td></tr>
+    <tr><td>Ставка перевода в P&amp;L</td><td class="r">{{ ne.monetization_rate | pct }}</td></tr>
+    {% if ne.adjustments_rate %}
+    <tr><td>Вычеты (цена инструмента)</td><td class="r">{{ ne.adjustments_rate | pct }}</td></tr>
+    {% endif %}
+    <tr><td><b>Деньги банка</b></td>
+        <td class="r"><b>{{ ne.money_total | mln(CUR) }}</b>
+        <small>{{ ne.net_rate | pct }} от натуральной величины</small></td></tr>
+  </table>
+  <small class="muted">Из стока {{ ne.natural_from_stock | num }}
+  {% if ne.stock_exhausted_month %}(кончается на {{ ne.stock_exhausted_month }} мес){% endif %}
+  · из потока {{ ne.natural_from_flow | num }}.</small>
 </section>
 {% endif %}
 

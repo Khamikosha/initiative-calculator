@@ -231,6 +231,7 @@ SCHEMA = {
     "acquisition": {"year1_target": (0.0, 1e9), "yoy_growth": (0.0, 5.0), "seasonality": None},
     # Третья сущность эффекта: ТОТ ЖЕ человек, ТОТ ЖЕ продукт, другое поведение.
     # Все поля скалярные, поэтому это обычный раздел — и веб-форма получает его даром.
+    "natural_effect": None,     # вложенные объекты: parts и adjustments
     "base_activation": {
         "name": None, "eligible_clients": (0.0, 2e9), "reach_share": _RATE,
         "workout_months": (0.0, 600.0), "monthly_inflow": (0.0, 1e9),
@@ -274,6 +275,23 @@ LINKED_KEYS = {"name": None, "clients_per_linked": (0.01, 100.0),
 # Откуда берётся связанный клиент. Доли ОДНОГО плана, в сумме 1.0 — а не три
 # независимых плана: независимые не сходятся и дают отрицательных «новых».
 LINKED_SOURCE_KEYS = {"own_base": _RATE, "reactivated": _RATE, "new": _RATE}
+
+# --- натуральный эффект -------------------------------------------------------
+# Что меряем и почём это в деньгах банка. Разделение обязательно: снижение просрочки,
+# сокращение обращений и сэкономленные часы — не рубли P&L, и подстановка их в итог
+# завышает эффект в разы.
+NATURAL_KEYS = {"name": None, "unit": None, "baseline": (0.0, 1e15),
+                "monthly_inflow": (0.0, 1e15), "workout_months": (0.0, 600.0),
+                "uplift_rate": _RATE, "measured_against_control": None,
+                "monetization": (0.0, 10.0), "relapse_share": _RATE,
+                "parts": None, "adjustments": None}
+# Часть неоднородной базы: своя доля, свой потолок эффекта и своя ставка перевода
+# в деньги. 90+ дней просрочки диалогом не лечится ни при каком качестве агента.
+NATURAL_PART_KEYS = {"name": None, "share": _RATE, "uplift_cap": _RATE,
+                     "monetization": (0.0, 10.0)}
+# Именованный вычет: инструмент помощи почти всегда чего-то стоит. Ставка — доля
+# от натурального эффекта, обычно отрицательная.
+NATURAL_ADJ_KEYS = {"name": None, "rate": (-10.0, 10.0)}
 
 # --- продукт-спутник ----------------------------------------------------------
 COMPANION_KEYS = {"name": None, "attach_rate": _RATE, "funded_rate": _RATE,
@@ -407,7 +425,7 @@ def validate_config(cfg):
     # разделы с вложенными объектами — своя проверка
     for sec, allowed in (("linked_client", LINKED_KEYS), ("companion", COMPANION_KEYS),
                          ("partner", PARTNER_KEYS), ("brief", BRIEF_KEYS),
-                         ("pilot", PILOT_KEYS)):
+                         ("pilot", PILOT_KEYS), ("natural_effect", NATURAL_KEYS)):
         val = cfg.get(sec)
         if val is None:
             continue
@@ -474,6 +492,41 @@ def validate_config(cfg):
             if pil.get("control_group") and not pil.get(b) and pil.get(a):
                 errs.append(f"pilot.{b}: заявлена контрольная группа, но её размер не задан — "
                             "без него нельзя проверить, мог ли пилот вообще поймать эффект.")
+
+    ne = cfg.get("natural_effect")
+    if isinstance(ne, dict):
+        prts = ne.get("parts")
+        if prts is not None:
+            if not isinstance(prts, list):
+                errs.append("natural_effect.parts: должен быть списком частей базы.")
+            else:
+                tot = 0.0
+                for i, pt in enumerate(prts):
+                    if not isinstance(pt, dict):
+                        errs.append(f"natural_effect.parts[{i}]: должен быть объектом.")
+                        continue
+                    _check_keys(pt, NATURAL_PART_KEYS, f"natural_effect.parts[{i}]", errs)
+                    v = pt.get("share")
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        tot += v
+                if prts and abs(tot - 1.0) > 0.005:
+                    errs.append(
+                        f"natural_effect.parts: доли частей базы в сумме дают {tot:.3f}, "
+                        "а должны 1.0. Недостающая часть базы молча не даёт эффекта, "
+                        "а лишняя даёт его дважды.")
+        adjs = ne.get("adjustments")
+        if adjs is not None:
+            if not isinstance(adjs, list):
+                errs.append("natural_effect.adjustments: должен быть списком вычетов.")
+            else:
+                for i, a in enumerate(adjs):
+                    if not isinstance(a, dict):
+                        errs.append(f"natural_effect.adjustments[{i}]: должен быть объектом.")
+                        continue
+                    _check_keys(a, NATURAL_ADJ_KEYS, f"natural_effect.adjustments[{i}]", errs)
+                    if not a.get("name"):
+                        errs.append(f"natural_effect.adjustments[{i}]: вычет без названия. "
+                                    "Безымянная поправка через месяц необъяснима.")
 
     _check_split((cfg.get("unit_economics") or {}).get("turnover_split"),
                  "unit_economics.turnover_split", errs)
@@ -794,6 +847,93 @@ def companion_stream(cfg, active, u):
     return rows
 
 
+def spread_stock_flow(stock_total, flow_monthly, workout, horizon, shape):
+    """Разложить сток и поток по месяцам. Общий скелет для всех блоков по своей базе.
+
+    Сток конечен: прорабатывается за `workout` месяцев и кончается. Ноль — растянуть
+    по форме кампании. Поток идёт ровно каждый месяц и не кончается никогда.
+    Возвращает две помесячные строки порознь: их вклады надо показывать раздельно,
+    иначе разовая проработка базы выдаётся за постоянный сервис.
+    """
+    w = int(workout)
+    if w > 0:
+        stock = [stock_total / w if m < min(w, horizon) else 0.0 for m in range(horizon)]
+    else:
+        stock = [stock_total * x for x in shape]
+    return stock, [flow_monthly] * horizon
+
+
+def decay_curve(cohorts, decay, month):
+    """Сколько из ранее набранных когорт ещё «живо» в данном месяце.
+
+    Линейное затухание за `decay` месяцев. Ноль означает эффект без затухания —
+    так почти не бывает, и validate() об этом скажет.
+    """
+    return sum(c * (1.0 if decay <= 0 else max(0.0, 1.0 - (month - j) / decay))
+               for j, c in enumerate(cohorts[:month + 1]))
+
+
+def natural_effect_stream(cfg, shape, horizon):
+    """Эффект, который меряется НЕ в деньгах, и его перевод в P&L банка.
+
+    Инициативы сплошь и рядом меряются в своей натуральной единице: снижение
+    просроченной задолженности в рублях долга, сокращение обращений в колл-центр
+    в штуках, экономия времени в часах. Ни одна из этих величин не равна деньгам
+    банка, и подстановка её в итог завышает эффект в разы.
+
+    На живом ФЭО AI-агента по просрочке «снижение просрочки на 3,65 млрд ₽» стояло
+    в итоговой строке как эффект. Реальные деньги — это высвобожденный резерв
+    (727 млн) минус недополученный процент по реструктуризации и минус отсрочка,
+    выданная тем, кто заплатил бы сам. После перевода осталось 459 млн, то есть
+    в восемь раз меньше, а после затрат и дисконтирования — 61 млн, в шестьдесят.
+
+    Отсюда обязательные части блока:
+      monetization — сколько КОПЕЕК P&L приносит единица натурального эффекта;
+      adjustments  — именованные вычеты: инструмент помощи почти всегда чего-то стоит;
+      parts        — база неоднородна, и в глубоких корзинах эффект структурно
+                     невозможен: 90+ дней диалогом не лечится ни при каком агенте.
+    """
+    ne = cfg.get("natural_effect")
+    if not ne:
+        return None
+    uplift = g(ne, "uplift_rate")
+    parts = ne.get("parts") or []
+
+    def _affected(base):
+        """Натуральный эффект с учётом неоднородности базы."""
+        if not parts:
+            return base * uplift, g(ne, "monetization", 1.0)
+        total, money = 0.0, 0.0
+        for p in parts:
+            u_p = min(uplift, g(p, "uplift_cap", 1.0))
+            amt = base * g(p, "share") * u_p
+            total += amt
+            money += amt * g(p, "monetization", 1.0)
+        return total, (money / total if total else 0.0)
+
+    stock_nat, mon_rate = _affected(g(ne, "baseline"))
+    flow_nat, _ = _affected(g(ne, "monthly_inflow"))
+    if stock_nat <= 0 and flow_nat <= 0:
+        return None
+
+    adj = sum(g(a, "rate") for a in (ne.get("adjustments") or []))
+    net_rate = (mon_rate + adj) * (1 - g(ne, "relapse_share"))
+
+    stock_c, flow_c = spread_stock_flow(stock_nat, flow_nat,
+                                        g(ne, "workout_months"), horizon, shape)
+    rows = [{"natural": s + f, "money": (s + f) * net_rate,
+             "from_stock": s * net_rate, "from_flow": f * net_rate}
+            for s, f in zip(stock_c, flow_c)]
+    return {"rows": rows, "unit": ne.get("unit", "ед."),
+            "natural_total": sum(stock_c) + sum(flow_c),
+            "natural_from_stock": sum(stock_c), "natural_from_flow": sum(flow_c),
+            "monetization_rate": mon_rate, "adjustments_rate": adj,
+            "net_rate": net_rate,
+            "stock_exhausted_month": (int(g(ne, "workout_months"))
+                                      if g(ne, "workout_months") > 0 else None),
+            "money_total": sum(r["money"] for r in rows)}
+
+
 def base_activation_stream(cfg, shape, u):
     """Растранзачивание своей базы: ТОТ ЖЕ человек, ТОТ ЖЕ продукт, другое поведение.
 
@@ -844,22 +984,15 @@ def base_activation_stream(cfg, shape, u):
     # Сток прорабатывается равномерно за workout_months и КОНЧАЕТСЯ; по умолчанию
     # растягивается по форме кампании. Поток идёт ровно, каждый месяц.
     workout = int(g(b, "workout_months", 0))
-    if workout > 0:
-        stock_cohorts = [stock_total / workout if m < min(workout, horizon) else 0.0
-                         for m in range(horizon)]
-    else:
-        stock_cohorts = [stock_total * w for w in shape]
-    flow_cohorts = [flow_monthly] * horizon
+    stock_cohorts, flow_cohorts = spread_stock_flow(stock_total, flow_monthly,
+                                                    workout, horizon, shape)
     cohorts = [s + f for s, f in zip(stock_cohorts, flow_cohorts)]
 
     rows = []
     for m in range(horizon):
         # Каждая когорта проснувшихся затухает линейно за decay_months.
-        # Ноль означает «эффект держится вечно» — так почти не бывает, и validate() скажет.
-        def _live(src):
-            return sum(c * (1.0 if decay <= 0 else max(0.0, 1.0 - (m - j) / decay))
-                       for j, c in enumerate(src[:m + 1]))
-        live_s, live_f = _live(stock_cohorts), _live(flow_cohorts)
+        live_s = decay_curve(stock_cohorts, decay, m)
+        live_f = decay_curve(flow_cohorts, decay, m)
         live = live_s + live_f
         rows.append({"active_uplifted": live, "margin": live * per_client,
                      "from_stock": live_s * per_client, "from_flow": live_f * per_client,
@@ -1118,6 +1251,10 @@ def run_pl(cfg, funnel):
     # Растранзачивание идёт по форме кампании, а не по кривой активной базы:
     # просыпается уже существующий клиент, когда до него дотянулась коммуникация.
     basact = base_activation_stream(cfg, shape, u)
+    # Натуральный эффект — разовый выигрыш на когорту, а не живущая база: резерв
+    # высвобождается один раз, обращение не поступает один раз. Поэтому затухания
+    # тут нет, а откат назад задаётся relapse_share.
+    natural = natural_effect_stream(cfg, shape, h)
 
     rows, cum, cum_disc, payback = [], 0.0, 0.0, None
     for m in range(h):
@@ -1138,7 +1275,8 @@ def run_pl(cfg, funnel):
         gm_comp = (comp[m]["margin"] + comp[m]["spend_fee"]) if comp else 0.0
         gm_linked = linked[m]["total"] if linked else 0.0
         gm_base = basact["rows"][m]["margin"] if basact else 0.0
-        gm += gm_comp + gm_linked + gm_base
+        gm_nat = natural["rows"][m]["money"] if natural else 0.0
+        gm += gm_comp + gm_linked + gm_base + gm_nat
         cost = ((media + acq_total) / camp_m if m < camp_m else 0.0)
         if m == 0:
             cost += g(k, "production") + g(k, "it_dev") + g(k, "one_off_other")
@@ -1157,6 +1295,7 @@ def run_pl(cfg, funnel):
         rows.append({"month": m + 1, "active_clients": active, "gross_margin": gm,
                      "margin_own": gm_own, "margin_companion": gm_comp,
                      "margin_linked": gm_linked, "margin_base_activation": gm_base,
+                     "margin_natural": gm_nat,
                      "costs": cost, "net": net, "cumulative": cum, "cumulative_discounted": cum_disc})
     total_gm = sum(r["gross_margin"] for r in rows); total_cost = sum(r["costs"] for r in rows)
     mkt_cost = media + g(k, "production") + acq_total
@@ -1168,11 +1307,13 @@ def run_pl(cfg, funnel):
     src = {"own_product": round(sum(r["margin_own"] for r in rows)),
            "companion": round(sum(r["margin_companion"] for r in rows)),
            "linked_client": round(sum(r["margin_linked"] for r in rows)),
-           "base_activation": round(sum(r["margin_base_activation"] for r in rows))}
+           "base_activation": round(sum(r["margin_base_activation"] for r in rows)),
+           "natural_effect": round(sum(r["margin_natural"] for r in rows))}
     # Доли считаются только когда все слагаемые одного знака. Если один источник
     # в минусе, «доля в марже» перестаёт что-либо значить: получаются 3454% у одного
     # и −2134% у другого. Вместо бессмысленного процента отдаём пустое и причину.
-    parts = [src["own_product"], src["companion"], src["linked_client"], src["base_activation"]]
+    parts = [src["own_product"], src["companion"], src["linked_client"],
+             src["base_activation"], src["natural_effect"]]
     src["shares"] = ({kk: round(vv / total_gm, 4) for kk, vv in src.items()}
                      if total_gm > 0 and all(v >= 0 for v in parts) else None)
     if src["shares"] is None:
@@ -1224,7 +1365,21 @@ def run_pl(cfg, funnel):
             "contacts_per_activation": round(1 / conv) if conv > 0 else None,
             "value_per_activation": round(value_per_act),
             "max_cost_per_contact": round(value_per_act * conv / hurdle, 3)}
+    natural_detail = None
+    if natural:
+        natural_detail = {
+            "name": (cfg.get("natural_effect") or {}).get("name", "Натуральный эффект"),
+            "unit": natural["unit"],
+            "natural_total": round(natural["natural_total"]),
+            "natural_from_stock": round(natural["natural_from_stock"]),
+            "natural_from_flow": round(natural["natural_from_flow"]),
+            "stock_exhausted_month": natural["stock_exhausted_month"],
+            "monetization_rate": round(natural["monetization_rate"], 4),
+            "adjustments_rate": round(natural["adjustments_rate"], 4),
+            "net_rate": round(natural["net_rate"], 4),
+            "money_total": round(natural["money_total"])}
     return {"horizon_months": h, "effect": effect,
+            "natural_effect": natural_detail,
             "market": market_position(cfg, active_curve),
             "margin_sources": src, "linked": linked_detail, "companion": companion_detail,
             "base_activation": base_detail,
@@ -1467,6 +1622,46 @@ def validate_extensions(cfg, f, pl):
             "продукте, который выводится. Проверьте: если эффект на связанного клиента "
             "не подтвердится замером, остаётся чистый убыток."
             )
+    ne, ned = cfg.get("natural_effect"), pl.get("natural_effect")
+    if ne and ned:
+        out.append(
+            f"НАТУРАЛЬНЫЙ ЭФФЕКТ: {nf(ned['natural_total'])} {ned['unit']} — это НЕ деньги "
+            f"банка. В P&L приходит {nf(ned['money_total'])} ₽: перевод по ставке "
+            f"{ned['monetization_rate']:.0%}"
+            + (f" минус вычеты {abs(ned['adjustments_rate']):.0%}"
+               if ned["adjustments_rate"] else "")
+            + f", итого {ned['net_rate']:.0%} от натуральной величины. "
+              "В отчёт выносить обе цифры и в разных строках.")
+        if g(ne, "monetization", 1.0) >= 1.0 and not (ne.get("parts") or []):
+            out.append(
+                "СТАВКА ПЕРЕВОДА НЕ ЗАДАНА: monetization = 1, то есть натуральный эффект "
+                "засчитан деньгами один к одному. Так почти никогда не бывает. Снижение "
+                "просрочки даёт высвобожденный резерв, а не сумму долга; сокращение "
+                "обращений — сэкономленные минуты, а не выручку. Задайте ставку явно — "
+                "именно на этом шаге живые ФЭО завышают эффект в разы.")
+        if not (ne.get("adjustments") or []):
+            out.append(
+                "ВЫЧЕТОВ НЕТ: инструмент, которым достигается эффект, почти всегда чего-то "
+                "стоит. Реструктуризация — недополученный процент, скидка — маржа, отсрочка "
+                "достаётся и тем, кто заплатил бы сам. Пустой список вычетов — это "
+                "утверждение «инструмент бесплатный», и его надо обосновать.")
+        if not ne.get("measured_against_control"):
+            out.append(
+                "НАТУРАЛЬНЫЙ ЭФФЕКТ БЕЗ КОНТРОЛЯ: uplift_rate задан без замера против "
+                "контрольной группы, значит в него попал естественный уровень. У просрочки "
+                "это базовый возврат, у обращений — сезонность. Все цифры блока — грейд C.")
+        if not (ne.get("parts") or []):
+            out.append(
+                "БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ: эффект применён ко всей базе одной ставкой. "
+                "Обычно он возможен не везде — 90+ дней просрочки диалогом не лечится, "
+                "и вся сумма там, где эффекта нет. Разложите базу на parts с потолками.")
+        if ned["natural_from_flow"] <= 0 and ned["natural_from_stock"] > 0:
+            out.append(
+                f"ТОЛЬКО СТОК: натуральная база конечна и вырабатывается за "
+                f"{ned['stock_exhausted_month'] or '—'} мес. Дальше эффект прекращается, "
+                "а постоянные затраты остаются. Задайте monthly_inflow, если база "
+                "пополняется.")
+
     ba, bad = cfg.get("base_activation"), pl.get("base_activation")
     if ba and bad:
         if not ba.get("measured_against_control"):
@@ -1711,12 +1906,20 @@ def confidence_index(cfg):
 def has_effect_beyond_acquisition(pl):
     """Есть ли у инициативы эффект помимо привлечения новых клиентов.
 
-    Спутник, связанный клиент и растранзачивание работают на УЖЕ существующей базе
-    и живут без единого нового клиента. Инициатива «разбудить спящих» — полноценный
-    тип, особенно на зрелом рынке, где новых людей взять неоткуда.
+    Спутник, связанный клиент, растранзачивание и натуральный эффект работают на УЖЕ
+    существующей базе и живут без единого нового клиента. Инициатива «разбудить спящих»
+    или «помочь выйти из просрочки» — полноценный тип, особенно на зрелом рынке,
+    где новых людей взять неоткуда.
+
+    Список источников НЕ перечисляется руками: он выводится из margin_sources.
+    Перечисление уже подводило — добавили натуральный эффект, забыли дописать сюда,
+    и прогон с NPV +308 млн получил вердикт «нечего считать». Любой новый блок
+    попадает под проверку сам, как только начинает давать маржу.
     """
     src = pl.get("margin_sources") or {}
-    return any(src.get(k, 0) for k in ("companion", "linked_client", "base_activation"))
+    return any(v for k, v in src.items()
+               if k not in ("own_product", "shares", "shares_note")
+               and isinstance(v, (int, float)))
 
 
 def currency_block(cfg, pl):
