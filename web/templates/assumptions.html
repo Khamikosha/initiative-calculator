@@ -119,7 +119,16 @@
 
 
 <section class="card">
-  <h3>Сроки и затраты</h3>
+  <h3>Горизонт и затраты</h3>
+
+  {% set meta_ps = params.META | rejectattr('key', 'in', ('name', 'type', 'product')) | list %}
+  {{ ptable(meta_ps, 'meta', cfg, [], chosen) }}
+  {% if cfg.unit_economics.mode == 'value_per_client' %}
+    <small class="muted">Горизонт и ставка пришли из модели продукта: ценность клиента
+    посчитана именно на них. Меняя их здесь, вы делаете затраты и доходы несопоставимыми —
+    движок остановит расчёт ошибкой ввода.</small>
+  {% endif %}
+
   {% set cost_main, cost_rest = params.split_by_type(params.COSTS, init.type, cfg) %}
   {{ ptable(cost_main, 'costs', cfg, seg_ids, chosen) }}
   {% if cost_rest %}

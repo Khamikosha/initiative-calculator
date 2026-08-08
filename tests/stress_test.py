@@ -303,8 +303,23 @@ cfg["unit_economics"]["cor_annual"] = 0.0
 cfg["funnel"]["cannibalization"] = 0.0
 f_d, p_d = run(cfg)
 fl = calc.flags(cfg, f_d, p_d)
-check("Флаг «Cost of Risk = 0» есть в движке", any("Cost of Risk = 0" in x for x in fl))
 check("Флаг «Каннибализация = 0» есть в движке", any("Каннибализация = 0" in x for x in fl))
+
+# Флаг стоимости риска — только для кредитных продуктов. Раньше он срабатывал на любом
+# продукте с положительной маржой, то есть на дебетовых картах и вкладах, где CoR
+# законно равен нулю. Постоянно кричащий ложный флаг обучает игнорировать все остальные.
+check("Флага CoR нет на дебетовом продукте — CoR там законно ноль",
+      not any("Cost of Risk = 0" in x for x in fl))
+cfg_cr = copy.deepcopy(BASE)
+cfg_cr["meta"]["product"] = "credit"
+cfg_cr["unit_economics"]["cor_annual"] = 0.0
+f_cr, p_cr = run(cfg_cr)
+check("На кредитном продукте с нулевым CoR флаг есть",
+      any("Cost of Risk = 0" in x for x in calc.flags(cfg_cr, f_cr, p_cr)))
+check("Незаданный продукт не молчит: три механизма не применились",
+      any("ПРОДУКТ НЕ ЗАДАН" in m for m in calc.validate(cfg, f_d, p_d)))
+check("С заданным продуктом этого сообщения нет",
+      not any("ПРОДУКТ НЕ ЗАДАН" in m for m in calc.validate(cfg_cr, f_cr, p_cr)))
 cfg2 = copy.deepcopy(BASE); cfg2["unit_economics"]["cor_annual"] = 0.15
 f_c, p_c = run(cfg2)
 check("Флага CoR нет, когда риск задан",
@@ -772,6 +787,31 @@ for path in sorted(CASES.glob("*.json")):
               f'инкремент {r["funnel"]["incremental_clients"]:,}, NPV {r["pl"]["npv"]:,}')
     except Exception as e:
         check(f"Кейс {path.name}", False, str(e))
+
+# ------------------------------- Линт: форматирование чисел (BACKLOG 35)
+# `.replace(",", " ")`, применённый ко ВСЕЙ строке сообщения, съедает обычные запятые
+# вместе с разделителями разрядов: «за 892 клиента, которые пришли бы и так» → «клиента
+# которые». Чинилось дважды и оба раза возвращалось, потому что защита держалась
+# на памяти. Единственное законное место конструкции — тело nf().
+import re as _re
+_offenders = []
+for _f in sorted(list((ROOT / "src").glob("*.py")) + list((ROOT / "web").glob("*.py"))):
+    _in_nf = False
+    for _i, _line in enumerate(_f.read_text(encoding="utf-8").splitlines(), 1):
+        _stripped = _line.strip()
+        if _stripped.startswith("def nf("):
+            _in_nf = True
+        elif _stripped.startswith("def ") and _in_nf:
+            _in_nf = False
+        if _stripped.startswith("#") or _in_nf:
+            continue
+        if _re.search(r'\.replace\(\s*","\s*,\s*"[  ]"\s*\)', _line):
+            _offenders.append(f"{_f.name}:{_i}")
+check("Форматирование чисел идёт только через nf()",
+      not _offenders,
+      f"ручной .replace найден в {', '.join(_offenders)}" if _offenders
+      else "конструкция вне nf() не встречается")
+
 
 # ---------------------------------------------------------------- вывод
 print(f"\n{'='*78}\nПРОЙДЕНО: {len(ok)}   ПРОВАЛЕНО: {len(fail)}\n{'='*78}")

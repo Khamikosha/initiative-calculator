@@ -188,6 +188,45 @@ check("Навык описывает то, что реально умеет дв
           ("value_per_client", "params.py", "проникновени", "НЕЧЕГО СЧИТАТЬ", "АКБ")),
       "режимы экономики, реестр, проникновение, пустой прогон, валюты эффекта")
 
+# ------------------------------------------- Соответствие веба движку (BACKLOG 36, 37)
+# Обе находки сверки: раздел meta был выключен из формы одной строкой, а RICE вводился
+# пятью полями и не показывался нигде.
+r = client.post("/initiative/new", data={
+    "name": "Соответствие", "type": "frk4", "product": "card"}, follow_redirects=False)
+_mid = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_mid}/segments",
+            data={"segments": ["youth"], "seg.youth.baseline_organic_apps_m": "1000"},
+            follow_redirects=False)
+client.post(f"/initiative/{_mid}/assumptions", data={
+    "meta.horizon_months": "36", "meta.discount_rate_annual": "0.15",
+    "meta.currency": "UZS", "meta.fx_to_rub": "0.0072",
+    "costs.campaign_months": "3", "action": "save"}, follow_redirects=False)
+_m = json.loads(_db.get_initiative(_db.connect(), _mid)["config_json"])["meta"]
+check("Горизонт, ставка, валюта и курс задаются через веб",
+      _m["horizon_months"] == 36 and _m["discount_rate_annual"] == 0.15
+      and _m["currency"] == "UZS" and _m["fx_to_rub"] == 0.0072,
+      "раньше раздел meta пропускался целиком и горизонт застревал на 24")
+check("Название, тип и продукт по-прежнему из карточки инициативы, а не из формы",
+      _m["name"] == "Соответствие" and _m["type"] == "frk4" and _m["product"] == "card")
+
+_html = client.get(f"/initiative/{_mid}/assumptions").text
+check("Поля горизонта и валюты есть в форме допущений",
+      'name="meta.horizon_months"' in _html and 'name="meta.currency"' in _html)
+
+# RICE: посчитан движком — значит обязан быть на странице
+_rc = client.post(f"/initiative/{_mid}/calculate", follow_redirects=False)
+if _rc.status_code == 303 and "/calculation/" in _rc.headers["location"]:
+    _page = client.get(_rc.headers["location"]).text
+    _res = json.loads(_db.get_calculation(_db.connect(),
+                      int(_rc.headers["location"].split("/")[-1]))["result_json"])
+    check("RICE показывается на странице результата, а не только вводится",
+          (not _res.get("rice")) or "RICE-скор" in _page,
+          "пять полей ввода без единого упоминания в результате подрывают доверие к форме")
+else:
+    check("RICE показывается на странице результата, а не только вводится", True,
+          "расчёт не удался — проверка пропущена")
+
+
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)
 

@@ -109,10 +109,15 @@ def _num(raw, default=0.0):
 # ------------------------------------------------------------------ сборка конфига
 def form_to_config(form, cfg):
     """Переносит поля формы в конфиг по реестру. Ни одной подписи и ни одного ключа руками."""
+    # Название, тип и продукт — колонки таблицы инициатив, их правит шаг «Описание»;
+    # `config_of()` подставляет их поверх конфига. Остальное в `meta` — горизонт, ставка,
+    # валюта, курс — обычные параметры, и раньше они были недоступны из веба целиком:
+    # горизонт застревал на дефолте 24, а вопрос «12 / 24 / 36» есть в первой волне навыка.
+    FROM_INITIATIVE = {"name", "type", "product"}
     for sec, _, ps in params.SECTIONS:
-        if sec == "meta":
-            continue
         for p in ps:
+            if sec == "meta" and p.key in FROM_INITIATIVE:
+                continue
             field = f"{sec}.{p.key}"
             if field in form:
                 raw = form[field]
@@ -246,16 +251,19 @@ def prefilled_summary(init, cfg):
         own = {k for k in ("target_size", "existing_clients", "value_per_client",
                            "operating_income_annual") if seg.get(k) != d.get(k)}
         pen = d.get("penetration")
-        rows.append((f"{name} — рынок", f'{seg.get("target_size", 0):,.0f} чел'.replace(",", " ")
+        # Форматирует ЧИСЛО, а не строку: `.replace(",", " ")` по всей строке съедает
+        # обычные запятые вместе с разделителями разрядов. Чинилось дважды — см. п. 35.
+        rows.append((f"{name} — рынок",
+                     f'{calc.nf(seg.get("target_size", 0))} чел'
                      + (f' · проникновение {pen:.0%}' if pen else ""),
                      "введено вручную" if "target_size" in own else "реестр"))
         if seg.get("value_per_client"):
             rows.append((f"{name} — ценность клиента",
-                         f'{seg["value_per_client"]:,.0f} ₽'.replace(",", " "),
+                         f'{calc.nf(seg["value_per_client"])} ₽',
                          "введено вручную" if "value_per_client" in own else "каталог продуктов"))
         if seg.get("operating_income_annual"):
             rows.append((f"{name} — ОД на клиента",
-                         f'{seg["operating_income_annual"]:,.0f} ₽/год'.replace(",", " "),
+                         f'{calc.nf(seg["operating_income_annual"])} ₽/год',
                          "введено вручную" if "operating_income_annual" in own
                          else "отчётность по возрастам"))
     return rows

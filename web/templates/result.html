@@ -408,6 +408,22 @@
 </section>
 {% endif %}
 
+{% if res.rice %}
+<section class="card">
+  <h3>RICE — для сравнения с другими инициативами</h3>
+  <div class="tiles">
+    <div class="tile"><span>RICE-скор</span><b>{{ res.rice.rice_score | num(1) }}</b></div>
+    <div class="tile"><span>NPV на чел-месяц</span>
+      <b class="{{ 'neg' if res.rice.npv_per_person_month < 0 }}">{{ res.rice.npv_per_person_month | mln(CUR) }}</b></div>
+    <div class="tile"><span>Reach</span><b>{{ res.rice.reach | num }}</b></div>
+    <div class="tile"><span>Effort</span><b>{{ res.rice.effort_person_months | num(1) }} чел-мес</b></div>
+  </div>
+  <small class="muted">Абсолютное значение RICE ни о чём не говорит — осмысленно только
+  сравнение инициатив между собой, и только при сопоставимых грейдах данных.
+  «NPV на чел-месяц» для этого честнее: он сразу в деньгах на единицу дефицитного ресурса.</small>
+</section>
+{% endif %}
+
 <section class="card meta-card">
   <h3>Воспроизводимость</h3>
   <p>Расчёт <b>№{{ c.id }}</b> от {{ c.created_at[:16] | replace("T", " ") }}
