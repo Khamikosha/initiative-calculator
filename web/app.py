@@ -180,6 +180,36 @@ def form_to_config(form, cfg):
     return cfg
 
 
+def form_to_nested(form, cfg, section):
+    """Поля формы → вложенный раздел конфига. Общий разбор для всех таких блоков.
+
+    Бриф и пилот разбираются своими функциями: у них повторяющиеся строки и своя
+    механика. У остальных блоков поля плоские, поэтому один разбор на всех —
+    иначе четвёртая копия одного и того же кода разойдётся с первыми тремя.
+
+    Пустой блок убирается целиком: полузаполненный `linked_client` без дохода
+    связанного даёт нулевой эффект и выглядит как «посчитали и ничего не вышло».
+    """
+    if not form.get(f"has_{section}"):
+        cfg.pop(section, None)
+        return cfg
+    out = {}
+    for p in params.nested_fields(section):
+        raw = form.get(f"{section}.{p.key}")
+        if raw in (None, ""):
+            continue
+        out[p.key] = str(raw).strip() if p.fmt == "text" else _num(raw, p.default)
+    if out:
+        # сохраняем то, что форма не показывает (например sources), — иначе шаг
+        # молча стёр бы заданное конфигом
+        keep = {k: v for k, v in (cfg.get(section) or {}).items()
+                if k not in {p.key for p in params.nested_fields(section)}}
+        cfg[section] = {**keep, **out}
+    else:
+        cfg.pop(section, None)
+    return cfg
+
+
 def apply_product_economics(cfg, product):
     """Режим экономики и горизонт из каталога продукта.
 
@@ -672,6 +702,10 @@ async def assumptions_save(request: Request, iid: int):
     f = await request.form()
     init = db.get_initiative(con, iid)
     cfg = form_to_config(f, config_of(init))
+    # Вложенные блоки разбираются общей функцией: добавить следующий — одна строка здесь
+    # и метаданные в реестре, без новой верстки и нового парсера.
+    for section in ("linked_client",):
+        cfg = form_to_nested(f, cfg, section)
     db.update_initiative(con, iid, config=cfg, status="assumptions")
     if f.get("action") == "save":
         return RedirectResponse(f"/initiative/{iid}/assumptions", status_code=303)

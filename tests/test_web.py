@@ -319,6 +319,63 @@ check("Сказано, что это не NPV инициативы",
       "иначе ценность продукта примут за прибыль")
 
 
+# ------------------------------- Вложенные блоки эффекта в веб-форме (BACKLOG 20)
+# Связанный клиент даёт больше половины эффекта на детских и семейных продуктах,
+# а задать его можно было только конфигом — то есть самая денежная часть линейки
+# была недоступна тем, ради кого приложение написано.
+check("Поля вложенного блока берутся из реестра, а не из шаблона",
+      {f.key for f in params.nested_fields("linked_client")} ==
+      set(calc.LINKED_KEYS),
+      "иначе четвёртый блок разойдётся с первыми тремя")
+check("У полей вложенного блока есть подписи и пояснения",
+      all(f.label != f.key and f.note for f in params.nested_fields("linked_client")
+          if f.key != "sources"))
+check("Заголовок раздела тоже из реестра",
+      "Связанный клиент" in params.nested_title("linked_client"))
+
+r = client.post("/initiative/new", data={
+    "name": "Связанный", "type": "product_launch", "product": "kids_card"},
+    follow_redirects=False)
+_lid = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_lid}/segments",
+            data={"segments": ["kids"], "seg.kids.baseline_organic_apps_m": "700"},
+            follow_redirects=False)
+check("Блок связанного клиента есть в форме допущений",
+      'name="has_linked_client"' in client.get(f"/initiative/{_lid}/assumptions").text)
+
+_lc = {"has_linked_client": "1", "linked_client.name": "Родитель",
+       "linked_client.clients_per_linked": "1.4", "linked_client.income_annual": "18000",
+       "linked_client.margin_rate": "0.35", "linked_client.attribution_share": "0.4",
+       "linked_client.churn_annual": "0.18", "linked_client.churn_reduction": "0.12",
+       "linked_client.selection_haircut": "0.7", "linked_client.cross_sell_uplift": "0.05"}
+client.post(f"/initiative/{_lid}/assumptions", data={
+    "costs.campaign_months": "3", "costs.production": "8000000",
+    "ch.0.name": "Пуши", "ch.0.kind": "internal", "ch.0.frk_tier": "4",
+    "ch.0.reach_abs": "2000000", "ch.0.response_rate": "0.018",
+    "ch.0.cr_to_app": "0.1", **_lc, "action": "save"}, follow_redirects=False)
+_lcfg = json.loads(_db.get_initiative(_db.connect(), _lid)["config_json"])
+check("Связанный клиент задаётся через веб и доезжает до конфига",
+      (_lcfg.get("linked_client") or {}).get("income_annual") == 18000.0)
+
+_lr = client.post(f"/initiative/{_lid}/calculate", follow_redirects=False)
+_lres = json.loads(_db.get_calculation(
+    _db.connect(), int(_lr.headers["location"].split("/")[-1]))["result_json"])
+check("Эффект связанного клиента попадает в расчёт",
+      (_lres["pl"].get("margin_sources") or {}).get("linked_client", 0) > 0,
+      f'{(_lres["pl"].get("margin_sources") or {}).get("linked_client", 0):,} ₽')
+
+# снятая галочка убирает блок целиком: полузаполненный даёт нулевой эффект
+# и выглядит как «посчитали и ничего не вышло»
+client.post(f"/initiative/{_lid}/assumptions", data={
+    "costs.campaign_months": "3", "ch.0.name": "Пуши", "ch.0.kind": "internal",
+    "ch.0.frk_tier": "4", "ch.0.reach_abs": "2000000",
+    "ch.0.response_rate": "0.018", "ch.0.cr_to_app": "0.1", "action": "save"},
+    follow_redirects=False)
+check("Снятая галочка убирает блок целиком, а не оставляет полузаполненным",
+      "linked_client" not in json.loads(
+          _db.get_initiative(_db.connect(), _lid)["config_json"]))
+
+
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)
 

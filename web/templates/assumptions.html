@@ -60,6 +60,40 @@
   </table>
 {% endmacro %}
 
+{% macro nested_block(section, cfg) %}
+  {% set on = cfg.get(section) %}
+  <details class="card fold nested" {{ 'open' if on }}>
+    <summary><b>{{ params.nested_title(section) }}</b>
+      {% if on %}<span class="on-badge">задан</span>{% endif %}</summary>
+    <label class="field switch">
+      <input type="checkbox" name="has_{{ section }}" value="1" {{ 'checked' if on }}>
+      <span>Учитывать этот эффект в расчёте</span>
+    </label>
+    <table class="params">
+      <thead><tr><th>Параметр</th><th class="r">Значение</th><th>Ед.</th><th>Что это</th></tr></thead>
+      <tbody>
+      {% for p in params.nested_fields(section) %}
+        {% if p.key != 'sources' %}
+        <tr>
+          <td>{{ p.label }}</td>
+          <td class="r">
+            <input name="{{ section }}.{{ p.key }}"
+                   class="{{ 'key' if p.key_assumption }}"
+                   inputmode="{{ 'text' if p.fmt == 'text' else 'decimal' }}"
+                   placeholder="{{ p.hint }}" title="{{ p.hint }}"
+                   value="{{ (cfg.get(section) or {}).get(p.key, '') }}">
+            {% if p.hint %}<small class="hint-in">{{ p.hint }}</small>{% endif %}
+          </td>
+          <td class="unit">{{ p.unit }}</td>
+          <td class="note">{{ p.note }}</td>
+        </tr>
+        {% endif %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </details>
+{% endmacro %}
+
 {% set tmeta = TYPE_META[init.type] %}
 <div class="callout type-note">
   <b>{{ tmeta.label }}.</b> Главный вопрос: {{ tmeta.metric }}. {{ tmeta.note }}
@@ -173,6 +207,13 @@
   </div>
 </section>
 
+
+<h2 class="need-head">Дополнительные источники эффекта</h2>
+<p class="muted need-lead">Эффект инициативы не всегда приходит с самого продукта.
+Связанный клиент — тот, кто платит вместо носителя: родитель за детскую карту.
+На детских и семейных продуктах он даёт больше половины эффекта.</p>
+
+{{ nested_block('linked_client', cfg) }}
 
 <details class="card fold" {{ 'open' if not ready }}>
   <summary><b>Что подставлено</b> — {{ prefilled | length }} значений, вводить не нужно</summary>

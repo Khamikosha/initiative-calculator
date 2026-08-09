@@ -258,3 +258,13 @@ table.params td.r .hint-in { text-align: right; }
 }
 .link-del:hover { color: var(--bad); }
 .nowrap { white-space: nowrap; }
+
+/* вложенный блок эффекта: не мешает базовому пути, но виден когда задан */
+details.nested > summary { font-size: 15px; }
+.on-badge {
+  background: #d9f2e3; color: var(--good); font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 10px; margin-left: 8px;
+}
+.field.switch { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.field.switch input { width: auto; }
+.field.switch > span { font-weight: 600; font-size: 14px; margin: 0; }
