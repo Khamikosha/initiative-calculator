@@ -36,12 +36,52 @@ BOOK_UNSUPPORTED = {
     "base_activation": "растранзачивание своей базы",
     "natural_effect":  "натуральный эффект и его перевод в деньги",
 }
+
+# Разделов мало. Книга отстаёт и на уровне ОТДЕЛЬНЫХ КЛЮЧЕЙ внутри поддержанных
+# разделов — а такой кейс сверяется успешно и расходится молча. Это опаснее целого
+# неподдержанного блока: там хотя бы стоит честное ⊘.
+#
+# Формат: (раздел, ключ) → чем именно расходится. Ключ внутри списка (каналы, сегменты)
+# проверяется по каждому элементу.
+BOOK_UNSUPPORTED_KEYS = {
+    ("unit_economics", "turnover_split"):
+        "движок делит оборот по видам (split_fee), книга множит весь на interchange_rate",
+    ("meta", "currency"):
+        "книга не читает валюту и подписывает суммы рублём",
+    ("meta", "fx_to_rub"):
+        "книга не пересчитывает курс",
+}
+# То же для элементов списков
+BOOK_UNSUPPORTED_LIST_KEYS = {
+    ("channels", "effective_freq_target"):
+        "движок делит частоту на заданную цель, книга зашила /3",
+    ("channels", "impressions"):
+        "движок берёт показы напрямую при cpm = 0, книга в этом случае даёт 0",
+}
+# Горизонт длиннее листа «Расчет_PL»: схема движка допускает до 600 месяцев,
+# в книге строк 36, и всё что дальше молча теряется.
+BOOK_MAX_HORIZON = 36
+
 _raw = json.loads(CASE.read_text(encoding="utf-8"))
 _missing = {k: v for k, v in BOOK_UNSUPPORTED.items() if _raw.get(k)}
-if _missing:
+_bad_keys = []
+for (sec, key), why in BOOK_UNSUPPORTED_KEYS.items():
+    if (_raw.get(sec) or {}).get(key):
+        _bad_keys.append((f"{sec}.{key}", why))
+for (sec, key), why in BOOK_UNSUPPORTED_LIST_KEYS.items():
+    if any((it or {}).get(key) for it in (_raw.get(sec) or [])):
+        _bad_keys.append((f"{sec}[].{key}", why))
+_h = (_raw.get("meta") or {}).get("horizon_months") or 0
+if _h > BOOK_MAX_HORIZON:
+    _bad_keys.append((f"meta.horizon_months = {_h:.0f}",
+                      f"на листе «Расчет_PL» {BOOK_MAX_HORIZON} строк, дальше поток теряется"))
+
+if _missing or _bad_keys:
     print(f"\n⊘ {CASE.name}: сверка с книгой не выполняется.")
     for k, v in _missing.items():
         print(f"    в кейсе есть «{k}» — {v}; в build_xlsx.py этого блока нет")
+    for k, v in _bad_keys:
+        print(f"    в кейсе задан «{k}» — {v}")
     print("  Инвариант «движок и книга считают одно и то же» на этом кейсе НЕ проверен.")
     print("  Достроить книгу или объявить её версией для базовых кейсов — BACKLOG 18.")
     sys.exit(0)
@@ -58,7 +98,8 @@ m = wb[name]
 
 # Строки листа «Модель» ищем по подписи, а не по номеру: номера едут при любой правке модели.
 LABELS = {"инкремент": "ИНКРЕМЕНТАЛЬНЫЕ КЛИЕНТЫ", "NPV": "NPV",
-          "АКБ": "АКБ — пик активной базы, чел", "ОД": "ОД за горизонт"}
+          "АКБ": "АКБ — пик активной базы, чел", "ОД": "ОД за горизонт",
+          "предельный CPA": "Предельный CPA"}
 ROW = {}
 for key, label in LABELS.items():
     found = [c.row for c in m["A"] if isinstance(c.value, str) and c.value.strip() == label]
@@ -102,7 +143,8 @@ for name, s in calc.SCEN.items():
 _f, _p = calc.evaluate(cfg)
 eff_rows = []
 for title, key, want in (("АКБ, пик", "АКБ", _p["effect"]["akb_peak"]),
-                         ("ОД за горизонт", "ОД", _p["effect"]["od_total"] or 0)):
+                         ("ОД за горизонт", "ОД", _p["effect"]["od_total"] or 0),
+                         ("Предельный CPA", "предельный CPA", _p.get("max_cpa") or 0)):
     got = cell(SCEN_COL["base"], key)
     eff_rows.append((title, want, got, abs(got - want) <= max(1.0, abs(want) * 1e-6)))
 
@@ -132,6 +174,17 @@ for mk in MARKERS:
     if in_eng != in_xl:
         mismatch.append((mk, in_eng, in_xl))
 
+# Индекс уверенности сверяем ЧИСЛОМ, а не только через булев порог «понижен / нет».
+# Пока сравнивался один булев флаг, расхождение 0,632 против 0,640 было невидимым:
+# обе цифры выше 0,6, решение совпадало, а знаменатель у книги был другой.
+_idx_row = [x.row for x in wb[next(n for n in wb.sheetnames if n.lower() == "ввод")]["A"]
+            if isinstance(x.value, str) and "ИНДЕКС УВЕРЕННОСТИ" in x.value]
+_idx_eng = (eng.get("confidence") or {}).get("index")
+_idx_book = (wb[next(n for n in wb.sheetnames if n.lower() == "ввод")][f"B{_idx_row[0]}"].value
+             if _idx_row else None)
+idx_ok = (_idx_eng is None and not _idx_book) or (
+    _idx_book is not None and _idx_eng is not None and abs(float(_idx_book) - _idx_eng) < 1e-9)
+
 # вердикт: сверяем не текст, а решение — понижен по качеству данных или нет
 xl_verdict = str(wb[it_name]["B4"].value or "") if it_name else ""
 v_eng = eng["verdict"]["downgraded_by_confidence"]
@@ -149,13 +202,17 @@ print(f"\nФлаги: движок {len(eng_flags)}, книга {len(xl_flags)} 
       f"{'совпадают' if not mismatch else 'РАСХОЖДЕНИЕ'}")
 for mk, in_eng, in_xl in mismatch:
     print(f"  ✗ «{mk}»: движок {'есть' if in_eng else 'нет'}, книга {'есть' if in_xl else 'нет'}")
+print(f"Индекс уверенности: движок {_idx_eng}, книга "
+      f"{round(float(_idx_book), 4) if _idx_book not in (None, '') else '—'} — "
+      f"{'совпадают' if idx_ok else 'РАСХОЖДЕНИЕ'}")
 print(f"Вердикт понижен по качеству данных: движок {v_eng}, книга {v_xl} — "
       f"{'совпадают' if verdict_ok else 'РАСХОЖДЕНИЕ'}")
 for title, want, got, good in eff_rows:
     print(f"{title:>16}: движок {want:>16,.0f}  книга {got:>16,.0f}  "
           f"{'OK' if good else 'РАСХОЖДЕНИЕ'}")
 
-bad = (sum(1 for r in rows if not r[-1]) + len(mismatch) + (0 if verdict_ok else 1)
+bad = (sum(1 for r in rows if not r[-1]) + len(mismatch)
+       + (0 if verdict_ok else 1) + (0 if idx_ok else 1)
        + sum(1 for r in eff_rows if not r[-1]))
 if bad:
     print(f"\n✗ Расхождений: {bad}. Excel и движок считают или говорят по-разному — "

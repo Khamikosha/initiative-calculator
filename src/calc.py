@@ -524,25 +524,10 @@ def validate_config(cfg):
 
     ne = cfg.get("natural_effect")
     if isinstance(ne, dict):
-        prts = None
-        if prts is not None:
-            if not isinstance(prts, list):
-                errs.append("natural_effect.parts: должен быть списком частей базы.")
-            else:
-                tot = 0.0
-                for i, pt in enumerate(prts):
-                    if not isinstance(pt, dict):
-                        errs.append(f"natural_effect.parts[{i}]: должен быть объектом.")
-                        continue
-                    _check_keys(pt, NATURAL_PART_KEYS, f"natural_effect.parts[{i}]", errs)
-                    v = pt.get("share")
-                    if isinstance(v, (int, float)) and not isinstance(v, bool):
-                        tot += v
-                if prts and abs(tot - 1.0) > 0.005:
-                    errs.append(
-                        f"natural_effect.parts: доли частей базы в сумме дают {tot:.3f}, "
-                        "а должны 1.0. Недостающая часть базы молча не даёт эффекта, "
-                        "а лишняя даёт его дважды.")
+        # Проверка `parts` живёт в общем цикле выше — он покрывает и natural_effect,
+        # и base_activation одним правилом. Здесь оставался её огрызок от рефакторинга:
+        # `prts = None` и условие, которое никогда не истинно. Двадцать строк мёртвой
+        # проверки читались как работающая защита.
         adjs = ne.get("adjustments")
         if adjs is not None:
             if not isinstance(adjs, list):
