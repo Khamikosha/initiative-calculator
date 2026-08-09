@@ -714,6 +714,12 @@ def calculation_page(request: Request, cid: int):
                 panel=db.latest_panel(con, c["initiative_id"]))
 
 
+@app.post("/calculation/{cid}/delete")
+def calculation_delete(request: Request, cid: int, back: str = Form("/")):
+    db.delete_calculation(con, cid)
+    return RedirectResponse(back or "/", status_code=303)
+
+
 @app.get("/calculation/{cid}/xlsx")
 def calculation_xlsx(cid: int):
     """Живая книга по одной инициативе: формулы, а не значения — её можно крутить самому.

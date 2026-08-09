@@ -1,9 +1,13 @@
 {% extends "base.html" %}
 
 {% macro cell(p, sec, cfg) %}
+  {# placeholder виден только в пустом поле, поэтому подсказка дублируется строкой ниже:
+     ошибка масштаба (0,15 вместо 0,015) случается как раз при ПРАВКЕ заполненного #}
   <input name="{{ sec }}.{{ p.key }}" inputmode="decimal"
          class="{{ 'key' if p.key_assumption }}"
+         placeholder="{{ p.hint }}" title="{{ p.hint }}"
          value="{{ cfg.get(sec, {}).get(p.key, p.default) }}">
+  {% if p.hint %}<small class="hint-in">{{ p.hint }}</small>{% endif %}
 {% endmacro %}
 
 {% block body %}
@@ -62,7 +66,9 @@
 </div>
 
 <h2 class="need-head">Что нужно задать</h2>
-<p class="muted need-lead">Остальное подставлено из реестра и каталога продуктов —
+<p class="muted need-lead"><b>Доли вводятся числом: 1,5% это 0,015.</b>
+Под каждым полем — типовой диапазон; выйти за него можно, но это повод перепроверить.
+Остальное подставлено из реестра и каталога продуктов —
 свёрнуто ниже. Без медиаплана считать нечего: показов не будет, а значит не будет
 ни заявок, ни инкремента.</p>
 
@@ -97,13 +103,17 @@
         </td>
         <td><input name="ch.{{ loop.index0 }}.frk_tier" class="tiny"
                    value="{{ ch.get('frk_tier', 4) }}"></td>
-        <td class="r"><input name="ch.{{ loop.index0 }}.budget" value="{{ ch.get('budget', '') }}"></td>
-        <td class="r"><input name="ch.{{ loop.index0 }}.cpm" value="{{ ch.get('cpm', '') }}"></td>
-        <td class="r"><input name="ch.{{ loop.index0 }}.ctr" value="{{ ch.get('ctr', '') }}"></td>
-        <td class="r"><input name="ch.{{ loop.index0 }}.response_rate" value="{{ ch.get('response_rate', '') }}"></td>
-        <td class="r"><input name="ch.{{ loop.index0 }}.cr_to_app" value="{{ ch.get('cr_to_app', '') }}"></td>
-        <td class="r"><input name="ch.{{ loop.index0 }}.brand_uplift" value="{{ ch.get('brand_uplift', '') }}"></td>
-        <td class="r"><input name="ch.{{ loop.index0 }}.reach_abs" value="{{ ch.get('reach_abs', '') }}"></td>
+        {# подсказки берутся из реестра каналов, а не пишутся здесь: типовой диапазон
+           живёт рядом с диапазоном допустимых значений и не разъезжается с ним #}
+        {% for key in ('budget', 'cpm', 'ctr', 'response_rate', 'cr_to_app',
+                       'brand_uplift', 'reach_abs') %}
+          {% set cp = params.CHANNEL_BY_KEY[key] %}
+          <td class="r"><input name="ch.{{ loop.index0 }}.{{ key }}"
+                 value="{{ ch.get(key, '') }}"
+                 placeholder="{{ cp.hint }}" title="{{ cp.hint }}">
+            {% if cp.hint %}<small class="hint-in">{{ cp.hint }}</small>{% endif %}
+          </td>
+        {% endfor %}
         <td></td>
       </tr>
       {% endfor %}

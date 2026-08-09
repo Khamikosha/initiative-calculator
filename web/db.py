@@ -158,6 +158,20 @@ def get_calculation(con, cid):
     return dict(row) if row else None
 
 
+def delete_calculation(con, cid):
+    """Удаляет расчёт.
+
+    Расчёт объявлен неизменяемым (BACKLOG 5), и это не отменяется: неизменяемость
+    защищает от ПРАВКИ задним числом, а не от уборки черновиков. Но удаление
+    необратимо, поэтому подтверждение обязательно, а снимок `make backup` его
+    сохраняет — восстановить можно оттуда.
+    """
+    row = con.execute("SELECT initiative_id FROM calculation WHERE id=?", (cid,)).fetchone()
+    con.execute("DELETE FROM calculation WHERE id=?", (cid,))
+    con.commit()
+    return row["initiative_id"] if row else None
+
+
 def list_calculations(con, iid=None):
     if iid is None:
         rows = con.execute(

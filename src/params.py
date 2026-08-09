@@ -39,7 +39,27 @@ class Param:
     key_assumption: bool = False    # сильнее прочих двигает результат — подтверждать первым
     types: tuple = ()           # типы инициатив, где параметр работает; пусто — во всех
     kinds: tuple = ()           # для каналов: типы каналов, где параметр работает
+    typical: tuple = ()         # обычный диапазон значений — подсказка, а не ограничение
     note: str = ""
+
+    @property
+    def hint(self) -> str:
+        """Подсказка в поле: как ЗАПИСАТЬ значение и какое обычно бывает.
+
+        Диапазон в `rng` — границы физического смысла, они ловят 15 вместо 0,15.
+        Но 0,15 вместо 0,015 проходит любую валидацию и завышает конверсию вдесятеро
+        молча. Спасает только подсказка перед глазами в момент ввода: пример записи
+        и типовой порядок величины.
+        """
+        if self.fmt in ("pct", "pct2"):
+            if self.typical:
+                lo, hi = self.typical
+                return f"обычно {_pc(lo)}–{_pc(hi)} — вводить долей: {_frac(hi)}"
+            return "вводить долей: 1,5% это 0,015"
+        if self.typical:
+            lo, hi = self.typical
+            return f"обычно {_num_hint(lo)}–{_num_hint(hi)}"
+        return ""
 
     @property
     def rng(self) -> Optional[Tuple[float, float]]:
@@ -53,6 +73,22 @@ class Param:
     def works_for(self, type_id) -> bool:
         """Влияет ли параметр на результат при этом типе инициативы."""
         return not self.types or type_id in self.types
+
+
+def _pc(x):
+    """Долю — в проценты для подсказки: человек думает процентами, вводит долями."""
+    v = x * 100
+    return (f"{v:g}%").replace(".", ",")
+
+
+def _frac(x):
+    return (f"{x:g}").replace(".", ",")
+
+
+def _num_hint(x):
+    # Через calc.nf(), а не своим `.replace`: линт в тестах поймал ровно это дублирование
+    # у меня же. Второй способ форматировать числа — второй способ их сломать.
+    return calc.nf(x) if abs(x) >= 1000 else (f"{x:g}").replace(".", ",")
 
 
 def P(key, section, label, **kw):
@@ -495,16 +531,20 @@ BASE_ACTIVATION = [
 # ------------------------------------------------------------------ ВОРОНКА
 FUNNEL = [
     P("approval_rate", "funnel", "Approval rate", unit="%", fmt="pct", default=0.60,
+      typical=(0.2, 0.95),
       grade="A", key_assumption=True, segment_scoped=True,
       note="Доля одобренных заявок. Карты 50–70%, кредиты 20–40%, вклады ~95%."),
     P("activation_rate", "funnel", "Activation rate", unit="%", fmt="pct", default=0.65,
+      typical=(0.55, 0.75),
       grade="A", key_assumption=True, segment_scoped=True,
       note="Доля одобренных, дошедших до целевого действия. Самая недооценённая дыра воронки."),
     P("cannibalization", "funnel", "Каннибализация", unit="%", fmt="pct", default=0.15,
+      typical=(0.1, 0.25),
       key_assumption=True, segment_scoped=True,
       note="Доля клиентов, переехавших со своих же продуктов. Ноль ставить только с обоснованием: "
            "в банке новый продукт почти всегда ест старый."),
     P("deadweight", "funnel", "Deadweight (взяли бы и так)", unit="%", fmt="pct", default=0.0,
+      typical=(0.3, 0.6),
       grade="D", segment_scoped=True, types=("pilot",), key_assumption=True,
       note="Доля тех, кто оформил бы и без промо. Для акций 30–60%, для обычных кампаний 0. "
            "«Скидка дала +40%» бессмысленно, если половина взяла бы и так."),
@@ -513,21 +553,26 @@ FUNNEL = [
 # ------------------------------------------------------------------ ЮНИТ-ЭКОНОМИКА
 UNIT = [
     P("avg_balance", "unit_economics", "Средний баланс", unit="₽", fmt="money", default=45_000,
+      typical=(30_000, 60_000),
       grade="A", key_assumption=True, segment_scoped=True,
       note="Остаток на счёте. Источник процентной маржи."),
     P("nim_annual", "unit_economics", "NIM / FTP-спред (годовой)", unit="%", fmt="pct",
+      typical=(0.05, 0.08),
       default=0.07, grade="A", segment_scoped=True,
       note="Ставка, по которой банк зарабатывает на остатке."),
     P("monthly_turnover", "unit_economics", "Оборот по карте в месяц", unit="₽", fmt="money",
       default=28_000, grade="A", segment_scoped=True,
       note="База для интерчейнджа и кэшбэка."),
     P("interchange_rate", "unit_economics", "Ставка интерчейнджа", unit="%", fmt="pct2",
+      typical=(0.008, 0.014),
       default=0.011, grade="A", segment_scoped=True, note="Комиссия от оборота, обычно 0,8–1,4%."),
     P("fee_income_m", "unit_economics", "Прочий комиссионный доход", unit="₽/мес", fmt="money",
       default=0, segment_scoped=True, note="Подписка, СМС-информирование, страховки."),
     P("cashback_rate", "unit_economics", "Кэшбэк (доля оборота)", unit="%", fmt="pct2",
+      typical=(0.004, 0.008),
       default=0.005, grade="A", segment_scoped=True, note="Программа лояльности. Прямой вычет из маржи."),
     P("servicing_cost_m", "unit_economics", "Стоимость обслуживания", unit="₽/мес", fmt="money",
+      typical=(50, 100),
       default=70, grade="B", segment_scoped=True,
       note="Себестоимость поддержки: процессинг, саппорт, выпуск."),
     P("cor_annual", "unit_economics", "Cost of Risk (годовой)", unit="%", fmt="pct", default=0.0,
@@ -538,6 +583,7 @@ UNIT = [
       grade="B", segment_scoped=True,
       note="За сколько месяцев клиент выходит на полную маржу."),
     P("monthly_churn", "unit_economics", "Месячный отток", unit="%", fmt="pct", default=0.035,
+      typical=(0.02, 0.05),
       grade="A", key_assumption=True, segment_scoped=True,
       note="Доля активных, отваливающихся за месяц. Определяет LTV. Ноль означает вечного клиента "
            "и завышает NPV."),
@@ -637,12 +683,17 @@ CHANNELS = [
            "Уровни вложены: 4 ⊂ 3 ⊂ 2 ⊂ 1.", kinds=("internal", "perform", "brand")),
     P("budget", "channels", "Бюджет", unit="₽", fmt="money", default=0),
     P("cpm", "channels", "CPM", unit="₽", fmt="money", default=0,
+      typical=(100, 500),
       note="Показы = бюджет / CPM × 1000.", kinds=("perform", "brand")),
-    P("ctr", "channels", "CTR", unit="%", fmt="pct2", default=0, note="Для perform-каналов.", kinds=("perform",)),
+    P("ctr", "channels", "CTR", unit="%", fmt="pct2", default=0,
+      typical=(0.003, 0.015), note="Для perform-каналов.", kinds=("perform",)),
     P("response_rate", "channels", "Response rate", unit="%", fmt="pct2", default=0,
+      typical=(0.01, 0.05),
       note="Для internal-каналов. Для коммуникаций задавать как uplift над контрольной группой.", kinds=("internal",)),
-    P("cr_to_app", "channels", "CR в заявку", unit="%", fmt="pct", default=0, kinds=("internal", "perform")),
+    P("cr_to_app", "channels", "CR в заявку", unit="%", fmt="pct", default=0,
+      typical=(0.02, 0.08), kinds=("internal", "perform")),
     P("brand_uplift", "channels", "Brand uplift", unit="%", fmt="pct", default=0,
+      typical=(0.03, 0.15),
       note="Для охватных каналов: на сколько процентов растёт органика.", kinds=("brand",)),
     P("reach_abs", "channels", "Охват базы", unit="чел", fmt="int", default=0,
       note="Для internal-каналов вместо показов.", kinds=("internal",)),

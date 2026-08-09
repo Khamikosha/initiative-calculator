@@ -408,6 +408,29 @@
 </section>
 {% endif %}
 
+{% if pl.value_per_client %}
+<section class="card">
+  <h3>Сколько стоит сам продукт</h3>
+  <div class="tiles">
+    <div class="tile"><span>Ценность клиента</span><b>{{ pl.value_per_client | money(CUR) }}</b>
+      <small>дисконтированная, за {{ pl.horizon_months | num }} мес, без затрат на привлечение</small></div>
+    <div class="tile"><span>На инкременте инициативы</span>
+      <b>{{ (pl.value_per_client * f.incremental_clients) | mln(CUR) }}</b>
+      <small>{{ pl.value_per_client | money(CUR) }} × {{ f.incremental_clients | num }} клиентов</small></div>
+    {% if pl.max_cpa %}
+      <div class="tile"><span>Предельный CPA</span><b>{{ pl.max_cpa | money(CUR) }}</b>
+        <small>при норме LTV/CAC {{ pl.hurdle_ltv_cac }}</small></div>
+      <div class="tile"><span>Фактический CPA</span>
+        <b class="{{ 'neg' if pl.incremental_cpa and pl.incremental_cpa > pl.max_cpa }}">{{ pl.incremental_cpa | money(CUR) }}</b>
+        <small>{{ 'выше предельного — платим больше, чем клиент стоит' if pl.incremental_cpa and pl.incremental_cpa > pl.max_cpa else 'укладывается в норму' }}</small></div>
+    {% endif %}
+  </div>
+  <small class="muted">Это ценность продукта на привлечённых клиентах, а <b>не</b> NPV
+  инициативы: затраты сюда не входят. Полный NPV в разрезе источников требует правила
+  разноса затрат — см. BACKLOG 38.</small>
+</section>
+{% endif %}
+
 {% if res.rice %}
 <section class="card">
   <h3>RICE — для сравнения с другими инициативами</h3>

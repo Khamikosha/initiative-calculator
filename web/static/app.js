@@ -183,3 +183,12 @@ if (claimTable) {
   if (form) form.addEventListener('submit', sync);
   sync();
 }
+
+// ------------------------------------------------------------------ подтверждение удаления
+// Текст берётся из data-атрибута, а не собирается в onsubmit: подтверждение с NPV
+// и вердиктом внутри требует вложенных кавычек, на которых шаблон уже споткнулся.
+document.querySelectorAll('form.js-confirm').forEach(f => {
+  f.addEventListener('submit', e => {
+    if (!confirm(f.dataset.confirm || 'Удалить?')) e.preventDefault();
+  });
+});

@@ -63,7 +63,14 @@
       <td class="r">{{ c.incremental | num }}</td>
       <td class="r {{ 'neg' if c.npv < 0 }}">{{ c.npv | mln }}</td>
       <td class="muted">{{ c.verdict.split(' —')[0] }}</td>
-      <td class="r"><a href="/calculation/{{ c.id }}/xlsx">Excel</a></td>
+      <td class="r nowrap">
+        <a href="/calculation/{{ c.id }}/xlsx">Excel</a>
+        <form method="post" action="/calculation/{{ c.id }}/delete" class="inline-del js-confirm"
+              data-confirm="Удалить расчёт от {{ c.created_at[:16] | replace('T', ' ') }}: NPV {{ c.npv | mln }}, {{ c.verdict.split(' —')[0] }}. Отменить нельзя — расчёт останется только в снимке make backup.">
+          <input type="hidden" name="back" value="/">
+          <button class="link-del" title="Удалить расчёт">×</button>
+        </form>
+      </td>
     </tr>
   {% endfor %}
   </tbody>
