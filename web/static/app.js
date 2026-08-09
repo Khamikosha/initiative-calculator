@@ -161,3 +161,25 @@ if (chbody) {
   chbody.addEventListener('change', refreshChannels);
   refreshChannels();
 }
+
+// ------------------------------------------------------------------ бриф: статус обязателен
+// Утверждение с текстом, но без статуса движок отвергает — и отвергает конфиг ЦЕЛИКОМ,
+// то есть блокирует все последующие шаги чужой ошибкой. На живом тесте человек застрял
+// на пилоте, читая сообщение про бриф. Требуем статус здесь, где его и выбирают.
+const claimTable = document.getElementById('claims');
+if (claimTable) {
+  const form = claimTable.closest('form');
+  const sync = () => {
+    claimTable.querySelectorAll('tr.claim').forEach(row => {
+      const text = (row.querySelector('textarea[name$=".claim"]')?.value || '').trim();
+      const sel = row.querySelector('select.status');
+      if (!sel) return;
+      sel.required = !!text;               // пустая строка остаётся необязательной
+      sel.classList.toggle('need-fill', !!text && !sel.value);
+    });
+  };
+  claimTable.addEventListener('input', sync);
+  claimTable.addEventListener('change', sync);
+  if (form) form.addEventListener('submit', sync);
+  sync();
+}

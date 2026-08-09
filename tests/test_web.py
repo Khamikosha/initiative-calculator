@@ -227,6 +227,37 @@ else:
           "расчёт не удался — проверка пропущена")
 
 
+# ------------------------------- Чужая ошибка не блокирует шаг молча (живой тест)
+# Утверждение брифа без статуса отвергало конфиг ЦЕЛИКОМ, и человек на шаге «Пилот»
+# читал ошибку про бриф. Выглядело как «пилот не применяется ни при каких значениях».
+r = client.post("/initiative/new", data={
+    "name": "Чужая ошибка", "type": "frk4", "product": "card"}, follow_redirects=False)
+_eid = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_eid}/brief", data={
+    "description": "тест", "claim.0.claim": "часть оплаты ложится на партнёра",
+    "claim.0.status": "", "action": "save"}, follow_redirects=False)
+r = client.post(f"/initiative/{_eid}/pilot", data={
+    "has_pilot": "1", "pilot.name": "Пилот", "pilot.geography": "Москва",
+    "pilot.rollout_geography": "РФ", "pilot.control_group": "1",
+    "pilot.sample_size": "40000", "pilot.control_size": "40000",
+    "pilot.baseline_rate": "0.52", "pilot.observed_rate": "0.61",
+    "pilot.scale_haircut": "0.75"}, follow_redirects=False)
+_cfg = json.loads(_db.get_initiative(_db.connect(), _eid)["config_json"])
+check("Пилот сохраняется, даже когда конфиг отвергнут из-за другого раздела",
+      (_cfg.get("pilot") or {}).get("name") == "Пилот",
+      "ввод человека не теряется")
+_page = client.get(r.headers["location"]).text
+check("Чужая ошибка названа чужой и ведёт на свой шаг",
+      "расчёт заблокирован" in _page and "Открыть шаг «Бриф»" in _page)
+check("Ошибка чужого раздела не выдаётся за ошибку пилота",
+      "Движок не принял пилот" not in _page,
+      "раньше здесь висело сообщение про бриф под заголовком про пилот")
+
+_mine, _foreign = app_mod.split_error(
+    calc.ConfigError("Конфиг не прошёл проверку:\n  - brief.claims[0].status = «None»"), "pilot")
+check("Заголовок ошибки не попадает в «мою» часть", _mine == "" and "brief" in _foreign)
+
+
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)
 

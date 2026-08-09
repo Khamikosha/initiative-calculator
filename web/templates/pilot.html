@@ -6,7 +6,20 @@
 уверенности и вердикт. <b>Пилот, который провели и не использовали в расчёте, —
 это выброшенные деньги.</b></p>
 
-{% if error %}
+{% if foreign %}
+<div class="callout bad">
+  <b>Пилот сохранён, но расчёт заблокирован — незакрытое в другом разделе.</b>
+  <p class="muted">Движок проверяет конфиг целиком, поэтому пройти дальше нельзя,
+  пока это не поправлено. К самому пилоту отношения не имеет.</p>
+  {% for sec, lines in foreign.items() %}
+    {% set step, label = foreign_steps[sec] %}
+    <p><a class="btn" href="/initiative/{{ init.id }}/{{ step }}">Открыть шаг «{{ label }}»</a></p>
+    <ul>{% for line in lines %}<li>{{ line.lstrip("- ") }}</li>{% endfor %}</ul>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if error and error.strip() %}
 <div class="callout bad">
   <b>Движок не принял пилот:</b>
   <ul>{% for line in error.split("\n") %}<li>{{ line.lstrip("- ") }}</li>{% endfor %}</ul>

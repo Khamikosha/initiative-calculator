@@ -284,6 +284,32 @@ def config_of(init):
     return cfg
 
 
+# Куда вести человека, если конфиг отвергнут из-за раздела, которого нет на текущем шаге.
+# `validate_config` проверяет конфиг ЦЕЛИКОМ, поэтому полузаполненный бриф блокирует
+# сохранение пилота — и человек читает на шаге «Пилот» ошибку про бриф, не понимая,
+# где чинить. На живом тесте это выглядело как «пилот не применяется ни при каких значениях».
+ERROR_STEP = {"brief": ("brief", "Бриф"), "pilot": ("pilot", "Пилот"),
+              "audience": ("segments", "Сегменты"), "channels": ("assumptions", "Допущения")}
+
+
+def split_error(err, current):
+    """Делит текст ошибки на «про этот шаг» и «про другие», с адресом чужой части.
+
+    Строку-заголовок («Конфиг не прошёл проверку:») в «мою» часть не тащим: иначе шаг
+    показывает «движок не принял пилот» там, где к пилоту нет ни одной претензии.
+    """
+    mine, foreign = [], {}
+    for line in str(err).splitlines():
+        hit = next((s for s in ERROR_STEP if s in line), None)
+        if hit is None:
+            continue                                  # заголовок или общая строка
+        if ERROR_STEP[hit][0] == current:
+            mine.append(line)
+        else:
+            foreign.setdefault(hit, []).append(line.strip())
+    return "\n".join(mine), foreign
+
+
 def resolved(cfg):
     """Прогон через движок: строгая валидация, затем сведение сегментов."""
     return calc.resolve_segments(calc.validate_config(json.loads(json.dumps(cfg))))
@@ -474,10 +500,12 @@ def pilot_checks(cfg):
 
 
 @app.get("/initiative/{iid}/pilot", response_class=HTMLResponse)
-def pilot_form(request: Request, iid: int, error: str = ""):
+def pilot_form(request: Request, iid: int, error: str = "", foreign: str = ""):
     init = db.get_initiative(con, iid)
     cfg = config_of(init)
     return page(request, "pilot.html", init=init, step="pilot", error=error,
+                foreign=json.loads(foreign) if foreign else {},
+                foreign_steps=ERROR_STEP,
                 pilot=cfg.get("pilot") or {}, checks=pilot_checks(cfg),
                 metric_choices=PILOT_METRIC_CHOICES,
                 metric_labels={p.key: p.label for p in params.ALL})
@@ -491,10 +519,13 @@ async def pilot_save(request: Request, iid: int):
     try:
         calc.validate_config(cfg)
     except calc.ConfigError as e:
-        only = [ln for ln in str(e).splitlines() if "pilot" in ln]
+        # Пилот всё равно записываем: ввод человека не теряем, а ошибка может быть
+        # вообще не про него — см. split_error().
         db.update_initiative(con, iid, config=cfg)
+        mine, foreign = split_error(e, "pilot")
         return RedirectResponse(
-            f"/initiative/{iid}/pilot?error=" + quote("\n".join(only) or str(e)),
+            f"/initiative/{iid}/pilot?error=" + quote(mine)
+            + ("&foreign=" + quote(json.dumps(foreign, ensure_ascii=False)) if foreign else ""),
             status_code=303)
     db.update_initiative(con, iid, config=cfg)
     if f.get("action") == "save":
