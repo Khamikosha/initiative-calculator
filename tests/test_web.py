@@ -375,6 +375,50 @@ check("Снятая галочка убирает блок целиком, а н
       "linked_client" not in json.loads(
           _db.get_initiative(_db.connect(), _lid)["config_json"]))
 
+# Остальные три блока эффекта. Раньше конфигом задавались все четыре, а веб знал
+# один — то есть спутник, натуральный эффект и партнёрский P&L существовали
+# в движке, но человеку через приложение были недоступны.
+_NESTED = {"linked_client": calc.LINKED_KEYS, "companion": calc.COMPANION_KEYS,
+           "natural_effect": calc.NATURAL_KEYS, "partner": calc.PARTNER_KEYS}
+_page = client.get(f"/initiative/{_lid}/assumptions").text
+for _sec, _keys in _NESTED.items():
+    check(f"Блок «{params.nested_title(_sec)}»: поля реестра совпадают с движком",
+          {f.key for f in params.nested_fields(_sec)} == set(_keys))
+    check(f"Блок «{params.nested_title(_sec)}»: подписи и пояснения на месте",
+          all(f.label != f.key and f.note for f in params.nested_fields(_sec)))
+    # проверяем разметку, а не словарь: тест, не открывавший страницу,
+    # ничего не знает о странице (BACKLOG 40)
+    check(f"Блок «{params.nested_title(_sec)}» отрисован на странице допущений",
+          f'name="has_{_sec}"' in _page)
+    # структурные поля (корзины, доли, вычеты) в форму не помещаются — они помечены
+    # в реестре как config_only, и шаблон больше не знает их имён поштучно
+    _missing = [f.key for f in params.nested_fields(_sec)
+                if not f.config_only and f'name="{_sec}.{f.key}"' not in _page]
+    check(f"Блок «{params.nested_title(_sec)}»: все поля есть в разметке",
+          not _missing, f"нет в форме: {_missing}" if _missing else
+          f"{len(_keys)} полей")
+
+# спутник — единственный блок со своей маржой поверх основного продукта,
+# поэтому проверяем сквозняком: форма → конфиг → расчёт
+client.post(f"/initiative/{_lid}/assumptions", data={
+    "costs.campaign_months": "3", "costs.production": "8000000",
+    "ch.0.name": "Пуши", "ch.0.kind": "internal", "ch.0.frk_tier": "4",
+    "ch.0.reach_abs": "2000000", "ch.0.response_rate": "0.018",
+    "ch.0.cr_to_app": "0.1", "has_companion": "1",
+    "companion.name": "Копилка", "companion.attach_rate": "0.3",
+    "companion.funded_rate": "0.6", "companion.avg_balance": "12000",
+    "companion.nim_annual": "0.06", "companion.balance_growth_m": "0.02",
+    "companion.spend_share": "0.1", "action": "save"}, follow_redirects=False)
+_ccfg = json.loads(_db.get_initiative(_db.connect(), _lid)["config_json"])
+check("Спутник задаётся через веб и доезжает до конфига",
+      (_ccfg.get("companion") or {}).get("avg_balance") == 12000.0)
+_cr = client.post(f"/initiative/{_lid}/calculate", follow_redirects=False)
+_cres = json.loads(_db.get_calculation(
+    _db.connect(), int(_cr.headers["location"].split("/")[-1]))["result_json"])
+check("Маржа спутника попадает в расчёт отдельной строкой",
+      (_cres["pl"].get("margin_sources") or {}).get("companion", 0) > 0,
+      f'{(_cres["pl"].get("margin_sources") or {}).get("companion", 0):,.0f} ₽')
+
 
 # ------------------------------- Имена полей формы соответствуют строкам таблицы
 # Регрессия, прожившая до живого теста: во вложенном цикле шаблона `loop.index0`

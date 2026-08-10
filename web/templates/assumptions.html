@@ -73,7 +73,7 @@
       <thead><tr><th>Параметр</th><th class="r">Значение</th><th>Ед.</th><th>Что это</th></tr></thead>
       <tbody>
       {% for p in params.nested_fields(section) %}
-        {% if p.key != 'sources' %}
+        {% if not p.config_only %}
         <tr>
           <td>{{ p.label }}</td>
           <td class="r">
@@ -214,10 +214,15 @@
 
 <h2 class="need-head">Дополнительные источники эффекта</h2>
 <p class="muted need-lead">Эффект инициативы не всегда приходит с самого продукта.
-Связанный клиент — тот, кто платит вместо носителя: родитель за детскую карту.
-На детских и семейных продуктах он даёт больше половины эффекта.</p>
+Каждый блок отвечает на свой вопрос: <b>кто меняется и в чём меряется изменение.</b>
+Связанный клиент — платит другой человек. Спутник — зарабатывает другой продукт.
+Натуральный эффект — меряется не в деньгах и требует перевода. Партнёр — своя экономика
+на той же базе. Незаполненные блоки в расчёт не идут.</p>
 
 {{ nested_block('linked_client', cfg) }}
+{{ nested_block('companion', cfg) }}
+{{ nested_block('natural_effect', cfg) }}
+{{ nested_block('partner', cfg) }}
 
 <details class="card fold" {{ 'open' if not ready }}>
   <summary><b>Что подставлено</b> — {{ prefilled | length }} значений, вводить не нужно</summary>

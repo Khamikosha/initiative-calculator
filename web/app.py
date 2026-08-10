@@ -704,7 +704,7 @@ async def assumptions_save(request: Request, iid: int):
     cfg = form_to_config(f, config_of(init))
     # Вложенные блоки разбираются общей функцией: добавить следующий — одна строка здесь
     # и метаданные в реестре, без новой верстки и нового парсера.
-    for section in ("linked_client",):
+    for section in ("linked_client", "companion", "partner", "natural_effect"):
         cfg = form_to_nested(f, cfg, section)
     db.update_initiative(con, iid, config=cfg, status="assumptions")
     if f.get("action") == "save":
