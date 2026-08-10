@@ -420,6 +420,105 @@ check("Маржа спутника попадает в расчёт отдель
       f'{(_cres["pl"].get("margin_sources") or {}).get("companion", 0):,.0f} ₽')
 
 
+# ------------------------------- Части неоднородной базы (BACKLOG 20)
+# Без разбиения отклик применяется ко всей базе целиком, включая ту часть, где
+# эффект структурно невозможен: спящий год не просыпается от пуша. Это один
+# из множителей, каждый из которых уже завышал результат на живых расчётах.
+check("Разделы с частями базы берутся из реестра, а не перечислены в шаблоне",
+      set(params.PARTS_SECTIONS) == {"base_activation", "natural_effect"})
+check("Поля части базы совпадают с ключами движка",
+      {f.key for f in params.part_fields("natural_effect")} == set(calc.NATURAL_PART_KEYS))
+check("Ставка перевода в деньги показывается только там, где движок её читает",
+      "monetization" not in {f.key for f in params.part_fields("base_activation")},
+      "base_activation считает сразу в рублях оборота — поле бы обещало влияние, "
+      "которого нет")
+
+# продукт без каталожной ценности: режим build_up, ставки маржи живые
+r = client.post("/initiative/new", data={
+    "name": "Растранзачивание", "type": "comms", "product": "card"},
+    follow_redirects=False)
+_pid = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_pid}/segments",
+            data={"segments": ["youth"], "seg.youth.baseline_organic_apps_m": "700"},
+            follow_redirects=False)
+_ppage = client.get(f"/initiative/{_pid}/assumptions").text
+for _sec in params.PARTS_SECTIONS:
+    _pmissing = [f.key for f in params.part_fields(_sec)
+                 if f'name="{_sec}.part.0.{f.key}"' not in _ppage]
+    check(f"Таблица частей раздела «{_sec}» отрисована со всеми полями",
+          not _pmissing, f"нет в форме: {_pmissing}" if _pmissing else "")
+
+_ba = {f"base_activation.{k}": v for k, v in (
+    ("eligible_clients", "2000000"), ("reach_share", "0.5"),
+    ("technically_reachable", "0.7"), ("uplift_rate", "0.1"),
+    ("turnover_before", "3000"), ("turnover_after", "9000"),
+    ("decay_months", "12"), ("attribution_share", "1"))}
+_rows = [("спит месяц", "0.5", "0.2"), ("спит полгода", "0.3", "0.05"),
+         ("спит год и больше", "0.2", "0")]
+for _i, (_n, _sh, _cap) in enumerate(_rows):
+    _ba[f"base_activation.part.{_i}.name"] = _n
+    _ba[f"base_activation.part.{_i}.share"] = _sh
+    _ba[f"base_activation.part.{_i}.uplift_cap"] = _cap
+_chan = {"costs.campaign_months": "3", "ch.0.name": "Пуши", "ch.0.kind": "internal",
+         "ch.0.frk_tier": "4", "ch.0.reach_abs": "2000000",
+         "ch.0.response_rate": "0.018", "ch.0.cr_to_app": "0.1", "action": "save"}
+client.post(f"/initiative/{_pid}/assumptions", data={**_ba, **_chan},
+            follow_redirects=False)
+_pcfg = json.loads(_db.get_initiative(_db.connect(), _pid)["config_json"])
+check("Строки таблицы доезжают до конфига списком частей",
+      [p["name"] for p in _pcfg["base_activation"]["parts"]] == [n for n, _, _ in _rows])
+check("Запятая в доле разбирается как десятичный разделитель",
+      _pcfg["base_activation"]["parts"][1]["share"] == 0.3)
+
+_pr = client.post(f"/initiative/{_pid}/calculate", follow_redirects=False)
+_with = json.loads(_db.get_calculation(
+    _db.connect(), int(_pr.headers["location"].split("/")[-1]))["result_json"])
+_wm = _with["pl"]["margin_sources"]["base_activation"]
+
+# те же данные без разбиения — разница и есть цена вопроса
+for _i in range(len(_rows)):
+    for _k in ("name", "share", "uplift_cap"):
+        _ba.pop(f"base_activation.part.{_i}.{_k}")
+client.post(f"/initiative/{_pid}/assumptions", data={**_ba, **_chan},
+            follow_redirects=False)
+check("Пустая таблица убирает части, а не оставляет пустой список",
+      "parts" not in json.loads(
+          _db.get_initiative(_db.connect(), _pid)["config_json"])["base_activation"],
+      "движок отличает «частей нет» от «части заданы» и на первом предупреждает")
+_pr2 = client.post(f"/initiative/{_pid}/calculate", follow_redirects=False)
+_without = json.loads(_db.get_calculation(
+    _db.connect(), int(_pr2.headers["location"].split("/")[-1]))["result_json"])
+_om = _without["pl"]["margin_sources"]["base_activation"]
+check("Разбиение базы уменьшает эффект — глубокая часть его не даёт",
+      0 < _wm < _om, f"с частями {_wm:,.0f} ₽ против {_om:,.0f} ₽ — "
+                     f"завышение в {_om / _wm:.2f} раза")
+check("Однородная база названа однородной",
+      any("СПЯЩАЯ БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ" in v for v in _without["validation"]))
+
+# Продукт с каталожной ценностью обнуляет ставки маржи снизу вверх — переводить
+# прирост оборота не во что, и блок молча давал ровно ноль.
+r = client.post("/initiative/new", data={
+    "name": "Растранзачивание на NPV", "type": "comms", "product": "kids_card"},
+    follow_redirects=False)
+_vid = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_vid}/segments",
+            data={"segments": ["kids"], "seg.kids.baseline_organic_apps_m": "700"},
+            follow_redirects=False)
+for _i, (_n, _sh, _cap) in enumerate(_rows):
+    _ba[f"base_activation.part.{_i}.name"] = _n
+    _ba[f"base_activation.part.{_i}.share"] = _sh
+    _ba[f"base_activation.part.{_i}.uplift_cap"] = _cap
+client.post(f"/initiative/{_vid}/assumptions", data={**_ba, **_chan},
+            follow_redirects=False)
+_vr = client.post(f"/initiative/{_vid}/calculate", follow_redirects=False)
+_vres = json.loads(_db.get_calculation(
+    _db.connect(), int(_vr.headers["location"].split("/")[-1]))["result_json"])
+check("Нулевая маржа растранзачивания при готовой ценности клиента объяснена",
+      _vres["pl"]["margin_sources"]["base_activation"] == 0 and
+      any("РАСТРАНЗАЧИВАНИЕ НЕ ПОСЧИТАНО" in v for v in _vres["validation"]),
+      "заполненный блок не должен давать ноль без причины")
+
+
 # ------------------------------- Имена полей формы соответствуют строкам таблицы
 # Регрессия, прожившая до живого теста: во вложенном цикле шаблона `loop.index0`
 # указывает на ВНУТРЕННИЙ цикл, и поля канала уезжали в чужие строки —

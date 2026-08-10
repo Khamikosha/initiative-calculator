@@ -946,7 +946,7 @@ NESTED_FIELD_META = {
             label="Доля возврата эффекта", unit="%", fmt="pct", typical=(0.1, 0.4),
             note="Часть тех, кому помогли, вернётся в просрочку. Эффект не вечен."),
         "parts": dict(label="Части базы", fmt="text", config_only=True,
-                      note="Доли и потолки uplift по корзинам. Задаётся конфигом: "
+                      note="Доли и потолки uplift по корзинам — таблицей ниже: "
                            "в глубоких корзинах эффект структурно невозможен."),
         "adjustments": dict(label="Именованные вычеты", fmt="text", config_only=True,
                             note="Задаётся конфигом. Инструмент помощи почти всегда "
@@ -965,6 +965,56 @@ def nested_fields(section):
         out.append(Param(key=key, section=section,
                          label=m.pop("label", key), **m))
     return out
+
+
+# ------------------------------------------------------- ЧАСТИ НЕОДНОРОДНОЙ БАЗЫ
+# `parts` есть и у natural_effect, и у base_activation, ключи одни и те же
+# (calc.NATURAL_PART_KEYS). Разница одна: base_activation ставку перевода в деньги
+# не читает — у него эффект сразу в рублях оборота и остатка. Показывать там поле,
+# которое движок игнорирует, значит обещать влияние, которого нет.
+# Разделы, у которых база раскладывается на части. Список ведётся здесь, а не
+# перечислением имён в шаблоне: следующий такой раздел не должен требовать правки
+# вёрстки — как это уже было со структурными полями вложенных блоков.
+PARTS_SECTIONS = (tuple(sec for sec, key in NESTED_KEYS if key == "parts")
+                  + tuple(sec for sec, (_, keys) in NESTED_SECTIONS.items()
+                          if "parts" in keys))
+
+PART_FIELD_META = {
+    "name": dict(label="Часть базы", fmt="text",
+                 note="Например: «спит месяц», «спит полгода», «спит больше года»."),
+    "share": dict(label="Доля этой части", unit="%", fmt="pct", key_assumption=True,
+                  note="Доли всех частей в сумме дают 1,0. Недостающая часть молча "
+                       "не даёт эффекта, лишняя даёт его дважды — движок проверяет сумму."),
+    "uplift_cap": dict(label="Потолок отклика в этой части", unit="%", fmt="pct",
+                       default=1.0, typical=(0.0, 0.3), key_assumption=True,
+                       note="Общий отклик режется этим потолком. В глубокой части "
+                            "эффект структурно невозможен: спящий год не просыпается "
+                            "от пуша, 90+ дней просрочки диалогом не лечится."),
+    "monetization": dict(label="Перевод в деньги для этой части", fmt="num", default=1.0,
+                         sections=("natural_effect",),
+                         note="Единица натурального эффекта здесь стоит столько рублей "
+                              "банка. Ставка своя у каждой части: в глубокой корзине "
+                              "возвращённый рубль дешевле."),
+}
+
+
+def part_fields(section):
+    """Поля одной строки таблицы частей базы — для того же макроса, что и остальные."""
+    out = []
+    for key in calc.NATURAL_PART_KEYS:
+        m = dict(PART_FIELD_META.get(key) or {})
+        only = m.pop("sections", ())
+        if only and section not in only:
+            continue
+        out.append(Param(key=key, section=section, label=m.pop("label", key), **m))
+    return out
+
+
+def parts_sum(cfg, section):
+    """Сумма долей — показать человеку до расчёта, а не ошибкой после."""
+    prts = ((cfg.get(section) or {}).get("parts")) or []
+    return sum(x for x in (pt.get("share") for pt in prts)
+               if isinstance(x, (int, float)) and not isinstance(x, bool))
 
 
 def nested_title(section):

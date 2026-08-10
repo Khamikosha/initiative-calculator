@@ -417,6 +417,41 @@ def delete(iid: int):
 CLAIM_FIELDS = ("claim", "implication", "maps_to", "grade", "status", "reason")
 
 
+def form_to_parts(form, cfg, section):
+    """Строки таблицы частей базы → `cfg[section]["parts"]`.
+
+    Та же механика, что у утверждений брифа: пустые строки выбрасываются, поэтому
+    запас пустых строк в форме ничего не стоит. Ключ строки — название части:
+    часть без имени нельзя обсуждать, а безымянная доля с потолком ноль читается
+    как ошибка ввода.
+
+    Пустой список УДАЛЯЕТСЯ, а не пишется пустым: движок отличает «частей нет,
+    считай по всей базе» от «части заданы» — и на первом ставит предупреждение.
+    """
+    blk = cfg.get(section)
+    if not isinstance(blk, dict):
+        return cfg
+    fields = [f.key for f in params.part_fields(section)]
+    parts, i = [], 0
+    while any(k.startswith(f"{section}.part.{i}.") for k in form.keys()):
+        name = (form.get(f"{section}.part.{i}.name") or "").strip()
+        if name:
+            pt = {"name": name}
+            for key in fields:
+                if key == "name":
+                    continue
+                v = (form.get(f"{section}.part.{i}.{key}") or "").strip()
+                if v:
+                    pt[key] = _num(v)
+            parts.append(pt)
+        i += 1
+    if parts:
+        blk["parts"] = parts
+    else:
+        blk.pop("parts", None)
+    return cfg
+
+
 def form_to_brief(form, cfg, description):
     """Строки таблицы утверждений → раздел `brief` конфига.
 
@@ -706,6 +741,10 @@ async def assumptions_save(request: Request, iid: int):
     # и метаданные в реестре, без новой верстки и нового парсера.
     for section in ("linked_client", "companion", "partner", "natural_effect"):
         cfg = form_to_nested(f, cfg, section)
+    # Части базы разбираются ПОСЛЕ блоков: до этого раздела ещё может не быть,
+    # а класть части в несуществующий раздел значит воскресить снятый блок.
+    for section in params.PARTS_SECTIONS:
+        cfg = form_to_parts(f, cfg, section)
     db.update_initiative(con, iid, config=cfg, status="assumptions")
     if f.get("action") == "save":
         return RedirectResponse(f"/initiative/{iid}/assumptions", status_code=303)

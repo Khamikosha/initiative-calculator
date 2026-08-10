@@ -60,6 +60,40 @@
   </table>
 {% endmacro %}
 
+{# Части неоднородной базы: повторяющиеся строки, как утверждения в брифе.
+   Пустые строки человек не заполняет — разбор их выбрасывает, поэтому запас
+   строк можно давать щедро. #}
+{% macro parts_table(section, cfg) %}
+  {% set fields = params.part_fields(section) %}
+  {% set rows = ((cfg.get(section) or {}).get('parts')) or [] %}
+  {% set total = params.parts_sum(cfg, section) %}
+  <div class="parts">
+    <p class="muted">Разложение базы на части. Без него отклик применяется ко всей
+    базе целиком, включая ту, где эффект невозможен: доли в сумме должны давать
+    <b>1,0</b>{% if rows %} — сейчас <b class="{{ 'sum-off' if (total - 1.0) | abs > 0.005 else 'sum-ok' }}">{{ '%.3f' | format(total) | replace('.', ',') }}</b>{% endif %}.</p>
+    <table class="params rows">
+      <thead><tr>{% for f in fields %}<th{{ ' class=r' | safe if f.fmt != 'text' }}>{{ f.label }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for i in range(rows | length + 3) %}
+        {% set row = rows[i] if i < (rows | length) else {} %}
+        <tr>
+        {% for f in fields %}
+          <td class="{{ 'r' if f.fmt != 'text' }}">
+            <input name="{{ section }}.part.{{ i }}.{{ f.key }}"
+                   class="{{ 'key' if f.key_assumption }}"
+                   inputmode="{{ 'text' if f.fmt == 'text' else 'decimal' }}"
+                   placeholder="{{ f.hint }}" title="{{ f.note }}"
+                   value="{{ row.get(f.key, '') }}">
+          </td>
+        {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <small class="muted">{% for f in fields %}<b>{{ f.label }}</b> — {{ f.note }}{% if not loop.last %}<br>{% endif %}{% endfor %}</small>
+  </div>
+{% endmacro %}
+
 {% macro nested_block(section, cfg) %}
   {% set on = cfg.get(section) %}
   <details class="card fold nested" {{ 'open' if on }}>
@@ -91,6 +125,7 @@
       {% endfor %}
       </tbody>
     </table>
+    {% if section in params.PARTS_SECTIONS %}{{ parts_table(section, cfg) }}{% endif %}
   </details>
 {% endmacro %}
 
@@ -256,6 +291,7 @@
   <section class="card">
     <h3>{{ title }}</h3>
     {% if split[0] %}{{ ptable(split[0], sec, cfg, seg_ids, chosen) }}{% endif %}
+    {% if sec == 'base_activation' %}{{ parts_table(sec, cfg) }}{% endif %}
     {% if split[1] %}
       <details class="rest">
         <summary>Прочие — при типе «{{ tmeta.label }}» на результат не влияют

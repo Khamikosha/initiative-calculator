@@ -268,3 +268,12 @@ details.nested > summary { font-size: 15px; }
 .field.switch { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
 .field.switch input { width: auto; }
 .field.switch > span { font-weight: 600; font-size: 14px; margin: 0; }
+
+/* Части неоднородной базы: повторяющиеся строки. Сумма долей подсвечивается прямо
+   в подводке — движок отвергнет конфиг, если она не 1,0, и узнавать об этом
+   лучше до нажатия «Посчитать», а не из красного блока после. */
+.parts { margin-top: 14px; }
+.parts .sum-ok { color: var(--good); }
+.parts .sum-off { color: var(--bad); }
+.params.rows td { padding: 3px 4px; }
+.params.rows input { width: 100%; }
