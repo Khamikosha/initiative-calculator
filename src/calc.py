@@ -342,7 +342,22 @@ PILOT_KEYS = {"name": None, "geography": None, "rollout_geography": None,
               "scale_haircut": (0.0, 2.0), "metrics": None, "metrics_are": None,
               "randomized": None, "matched_at_baseline": None,
               "metric_cv": (0.0, 20.0),
-              "tail_months": (0.0, 600.0), "metrics_tail": None}
+              "tail_months": (0.0, 600.0), "metrics_tail": None, "groups": None}
+
+# Замер по группе: абсолютные уровни на начало и конец пилота. Дельту движок считает
+# сам, и не одну, а две — и в этом весь смысл.
+#
+# Разница «до и после» ВНУТРИ группы эффектом не является: за восемь месяцев клиенты
+# стали старше, прошёл сезон, изменился рынок. Всё это попадёт в «рост», если сравнивать
+# группу с самой собой. Контрольная группа прожила ровно те же восемь месяцев, поэтому
+# эффект — это разница разниц: (конец−начало) теста минус (конец−начало) контроля.
+#
+# Побочная выгода той же арифметики: разница между группами НА СТАРТЕ должна быть около
+# нуля, если группы выровняли. Это прямая проверка того, что выравнивание сработало,
+# и она бесплатна.
+PILOT_GROUP_KEYS = {"name": None, "role": None, "metric": None,
+                    "value_start": (-1e12, 1e12), "value_end": (-1e12, 1e12)}
+PILOT_ROLES = ("test", "control")
 
 # Метрики-УРОВНИ: абсолютные величины, а не доли. С ними у пилота с контрольной
 # группой есть развилка, которой нет у долей, и движок не имеет права проходить
@@ -516,6 +531,22 @@ def validate_config(cfg):
         if _ma is not None and _ma not in PILOT_METRICS_ARE:
             errs.append(f"pilot.metrics_are: допустимо «level» (уровень в тестовой группе) "
                         f"или «uplift» (прирост против контроля), получено «{_ma}».")
+        _grp = pil.get("groups")
+        if _grp is not None:
+            if not isinstance(_grp, list):
+                errs.append("pilot.groups: должен быть списком замеров по группам.")
+            else:
+                for i, gr in enumerate(_grp):
+                    if not isinstance(gr, dict):
+                        errs.append(f"pilot.groups[{i}]: должен быть объектом.")
+                        continue
+                    _check_keys(gr, PILOT_GROUP_KEYS, f"pilot.groups[{i}]", errs)
+                    if gr.get("role") not in PILOT_ROLES:
+                        errs.append(f"pilot.groups[{i}].role: «test» или «control», "
+                                    f"получено «{gr.get('role')}».")
+                    if gr.get("metric") not in PILOT_TARGET:
+                        errs.append(f"pilot.groups[{i}].metric: «{gr.get('metric')}» — "
+                                    "движок такого параметра не знает.")
         _tail = pil.get("metrics_tail")
         if _tail is not None:
             if not isinstance(_tail, dict):
@@ -643,6 +674,54 @@ def validate_config(cfg):
     return cfg
 
 
+def critical_cv(uplift, level, n_per_group):
+    """Разброс, при котором прирост ПЕРЕСТАЁТ быть отличимым от шума.
+
+    Обратная задача к mde_mean: разброса нет, но есть прирост, уровень и размеры
+    групп — и этого хватает, чтобы спросить не «доказан ли результат», а «насколько
+    однородной должна быть база, чтобы он был доказан». Ответ сравнивается с типичным
+    диапазоном рознице, и решение становится проверяемым без единой новой цифры.
+    """
+    if not n_per_group or level <= 0 or uplift <= 0:
+        return None
+    return uplift * math.sqrt(n_per_group) / (4.0 * level)
+
+
+def breakeven_decay(cfg, lo=1.0, hi=None, steps=24):
+    """Срок жизни эффекта, при котором расчёт выходит в ноль по NPV.
+
+    Когда срока никто не знает — а это обычное дело, замер всегда короче горизонта —
+    спорить о его величине бессмысленно. Полезнее перевернуть вопрос: при каком сроке
+    решение меняется. «Окупается, если эффект держится дольше 11 месяцев» — утверждение,
+    которое можно проверить качественно, не имея ни одной новой цифры.
+
+    Возвращает None, если знак NPV не меняется на всём диапазоне: тогда срок ни на что
+    не влияет, и это ответ лучше любого числа — решение от него не зависит.
+    """
+    if not isinstance(cfg.get("base_activation"), dict):
+        return None
+    hi = hi or float(g(cfg.get("meta") or {}, "horizon_months", 36))
+    if hi <= lo:
+        return None
+
+    def npv_at(d):
+        c = copy.deepcopy(cfg)
+        c["base_activation"]["decay_months"] = d
+        return evaluate(c)[1]["npv"]
+
+    n_lo, n_hi = npv_at(lo), npv_at(0.0)      # 0 = не затухает, самый щедрый вариант
+    if (n_lo >= 0) == (n_hi >= 0):
+        return None
+    a, b = lo, hi
+    for _ in range(steps):
+        m = (a + b) / 2.0
+        if (npv_at(m) >= 0) == (n_lo >= 0):
+            a = m
+        else:
+            b = m
+    return round((a + b) / 2.0, 1)
+
+
 def decay_from_tail(window_months, tail_months, ratio):
     """Срок затухания из ДВУХ чисел: средней за окно замера и средней за его хвост.
 
@@ -709,6 +788,9 @@ def apply_pilot(cfg):
     if not p:
         return cfg
     cfg = copy.deepcopy(cfg)
+    # ПОСЛЕ копии: иначе `p` продолжает указывать на исходный конфиг, и всё, что
+    # функция допишет в пилот, уедет во входной объект, а не в результат.
+    p = cfg["pilot"]
     notes, applied = [], []
     label = p.get("name") or "пилот"
 
@@ -736,6 +818,61 @@ def apply_pilot(cfg):
     # осторожный коэффициент 0,75 превращает это в 45,75% — то есть чем аккуратнее
     # мы переносим хорошую новость, тем хуже становится база, которая была и без пилота.
     # Правильно: 55% + (61% − 55%) × 0,75 = 59,5%. Осторожность применяется к дельте.
+    # --- замеры по группам → разница разниц ------------------------------------
+    groups = p.get("groups") or []
+    if groups:
+        by_metric = {}
+        for gr in groups:
+            by_metric.setdefault(gr.get("metric"), []).append(gr)
+        derived = {}
+        for metric, rows_g in sorted(by_metric.items()):
+            tests = [r for r in rows_g if r.get("role") == "test"]
+            ctrls = [r for r in rows_g if r.get("role") == "control"]
+            if not tests:
+                continue
+            d_test = sum(g(r, "value_end") - g(r, "value_start") for r in tests) / len(tests)
+            if not ctrls:
+                notes.append(
+                    f"РОСТ БЕЗ КОНТРОЛЯ — НЕ ЭФФЕКТ: {metric} вырос на {nf(d_test)} "
+                    "внутри группы за время пилота, но контрольной группы в замерах нет. "
+                    "За тот же срок клиенты стали старше, прошёл сезон, изменился рынок — "
+                    "всё это сидит в этой цифре. Добавьте строку с ролью «контроль»: "
+                    "эффект это разница разниц, а не разница до и после.")
+                continue
+            d_ctrl = sum(g(r, "value_end") - g(r, "value_start") for r in ctrls) / len(ctrls)
+            did = d_test - d_ctrl
+            gap0 = (sum(g(r, "value_start") for r in tests) / len(tests)
+                    - sum(g(r, "value_start") for r in ctrls) / len(ctrls))
+            derived[metric] = did
+            notes.append(
+                f"РАЗНИЦА РАЗНИЦ: {metric} — тест {nf(d_test)}, контроль {nf(d_ctrl)}, "
+                f"эффект {nf(did)}. Контроль прожил тот же срок, поэтому сезон, взросление "
+                "клиентов и движение рынка из цифры уже вычтены.")
+            base_lvl = sum(g(r, "value_start") for r in ctrls) / len(ctrls)
+            if base_lvl and abs(gap0) > 0.05 * abs(base_lvl):
+                notes.append(
+                    f"ГРУППЫ РАЗОШЛИСЬ НА СТАРТЕ: {metric} — разрыв {nf(gap0)} ещё до "
+                    "пилота, то есть выравнивание сработало не полностью. Разница разниц "
+                    "это учитывает (стартовый разрыв вычитается), но чем он больше, "
+                    "тем сильнее допущение, что дальше группы двигались бы одинаково.")
+            elif base_lvl:
+                notes.append(
+                    f"ВЫРАВНИВАНИЕ ПОДТВЕРЖДЕНО ЗАМЕРОМ: {metric} — на старте группы "
+                    f"расходились на {nf(gap0)} при уровне {nf(base_lvl)}. Это не заявление "
+                    "о дизайне, а проверка по вашим же числам.")
+            notes.append(
+                f"ЭТО УРОВЕНЬ НА КОНЕЦ ОКНА: {metric} — эффект измерен в последний месяц "
+                "замера, а не усреднён по всему сроку. Если группы выровняли, на старте "
+                "разницы не было и все восемь месяцев она нарастала: средняя за окно "
+                "тогда ЗАНИЖАЕТ полку, а конец окна — лучшая её оценка из имеющегося.")
+        for metric, v in derived.items():
+            if metric not in (p.get("metrics") or {}):
+                p.setdefault("metrics", {})[metric] = v
+        if derived:
+            # посчитанное из абсолютов — однозначно прирост против контроля,
+            # спрашивать «уровень или прирост» здесь уже нечего
+            p["metrics_are"] = "uplift"
+
     metrics_are = p.get("metrics_are")
     for k, v in (p.get("metrics") or {}).items():
         sec = PILOT_TARGET.get(k)
@@ -825,14 +962,30 @@ def apply_pilot(cfg):
         cv = g(p, "metric_cv")
         for k, v in sorted(lvl_uplifts.items()):
             if cv <= 0:
+                lvl0 = g(cfg.get("unit_economics") or {}, k)
+                ccv = critical_cv(v, lvl0, n_c) if lvl0 > 0 else None
+                if ccv is None:
+                    notes.append(
+                        f"ДОКАЗАТЕЛЬНОСТЬ НЕ ПРОВЕРЕНА: {k} — прирост {nf(v)} при "
+                        f"{nf(n_c)} на группу, но разброса нет, а у рубля он из среднего "
+                        "не выводится. Задайте metric_cv (обычно 1,5–3 на рознице).")
+                    continue
+                # Разброса нет и не будет — тогда спрашиваем не «доказано ли»,
+                # а «насколько однородной должна быть база, чтобы было доказано».
+                # Ответ считается из того, что уже есть, и его можно проверить
+                # качественно: это утверждение о базе, а не о пилоте.
+                verdict = ("результат устойчив: столь однородной базы на рознице "
+                           "не бывает даже близко" if ccv >= 4.0 else
+                           "результат на грани — типичный разброс на рознице 1,5–3×, "
+                           "и он накрывает эту границу" if ccv >= 1.5 else
+                           "результат хрупкий: чтобы прирост был различим, база должна "
+                           "быть однороднее, чем на рознице бывает")
                 notes.append(
-                    f"ДОКАЗАТЕЛЬНОСТЬ НЕ ПРОВЕРЕНА: {k} — прирост {nf(v)} при {nf(n_c)} "
-                    "на группу, но дан только средний уровень без разброса. У доли разброс "
-                    "известен по самой доле, у рубля — нет: два пилота с одинаковым средним "
-                    "доказывают разное, если в одном клиенты однородны, а в другом среднее "
-                    "держат несколько крупных. Задайте metric_cv (разброс к среднему, "
-                    "обычно 1,5–3 на рознице) — иначе неизвестно, отличим ли этот прирост "
-                    "от шума вообще.")
+                    f"РАЗБРОСА НЕТ — СЧИТАЕМ ОБРАТНОЕ: {k}, прирост {nf(v)} при "
+                    f"{nf(n_c)} на группу различим, пока разброс не выше "
+                    f"{ccv:.1f}× от среднего. {verdict[0].upper() + verdict[1:]}. "
+                    "Это не замена замеру, но проверить такое утверждение можно "
+                    "и без новых цифр.")
                 continue
             base_lvl = g(cfg.get("unit_economics") or {}, k)
             sd = cv * (base_lvl if base_lvl > 0 else abs(v))
@@ -1956,6 +2109,28 @@ def validate_extensions(cfg, f, pl):
                 f"{ned['stock_exhausted_month'] or '—'} мес. Дальше эффект прекращается, "
                 "а постоянные затраты остаются. Задайте monthly_inflow, если база "
                 "пополняется.")
+
+    # Срок жизни эффекта обычно не знает никто: замер всегда короче горизонта.
+    # Спорить о его величине бессмысленно — полезнее знать, при каком сроке
+    # меняется решение.
+    if isinstance(cfg.get("base_activation"), dict):
+        _be = breakeven_decay(cfg)
+        _obs = g(cfg.get("pilot") or {}, "duration_months")
+        if _be is None:
+            out.append(
+                "СРОК ЖИЗНИ ЭФФЕКТА НА РЕШЕНИЕ НЕ ВЛИЯЕТ: знак NPV одинаков и при "
+                "затухании за месяц, и при полном его отсутствии. Уточнять срок "
+                "незачем — решение держится на другом.")
+        else:
+            out.append(
+                f"РЕШЕНИЕ ДЕРЖИТСЯ НА СРОКЕ ЖИЗНИ ЭФФЕКТА: NPV выходит в ноль при "
+                f"затухании за {_be:g} мес. Дольше — окупается, короче — нет."
+                + (f" Замеряли {_obs:g} мес, то есть порог "
+                   + ("внутри окна замера: он подтверждён наблюдением."
+                      if _be <= _obs else
+                      "ЗА пределами наблюдения — держится ли эффект столько, "
+                      "мы не видели и из этих данных не узнаем.")
+                   if _obs > 0 else ""))
 
     ba, bad = cfg.get("base_activation"), pl.get("base_activation")
     # Проверка ДО `if ba and bad`: именно здесь bad равен нулю, и старое условие

@@ -603,6 +603,21 @@ def form_to_pilot(form, cfg):
             if tail_raw not in (None, ""):
                 tail[key] = _num(tail_raw)
         i += 1
+    # замеры по группам: строка без названия или без обоих уровней бессмысленна —
+    # дельту не из чего считать
+    pg, j = [], 0
+    while any(k.startswith(f"pgroup.{j}.") for k in form.keys()):
+        nm = (form.get(f"pgroup.{j}.name") or "").strip()
+        v0, v1 = form.get(f"pgroup.{j}.value_start"), form.get(f"pgroup.{j}.value_end")
+        if nm and v0 not in (None, "") and v1 not in (None, ""):
+            pg.append({"name": nm,
+                       "role": form.get(f"pgroup.{j}.role") or "test",
+                       "metric": form.get(f"pgroup.{j}.metric") or "monthly_turnover",
+                       "value_start": _num(v0), "value_end": _num(v1)})
+        j += 1
+    if pg:
+        p["groups"] = pg
+
     if metrics:
         p["metrics"] = metrics
     if tail:

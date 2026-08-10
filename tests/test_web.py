@@ -816,10 +816,10 @@ check("Рандомизация с выравниванием снимает в�
 _selfsel = json.loads(json.dumps(_beh)); _selfsel["pilot"]["randomized"] = False
 check("Без рандомизации движок называет отбор отбором",
       any("ОТБОР ВМЕСТО ЭФФЕКТА" in n for n in _notes_of(_selfsel)))
-check("Только средние — доказательность честно не проверена, а не «доказано»",
-      any("ДОКАЗАТЕЛЬНОСТЬ НЕ ПРОВЕРЕНА" in n for n in _n_nosd) and
-      not any("ПРИРОСТ ДОКАЗАТЕЛЕН" in n for n in _n_nosd),
-      "у рубля разброс не выводится из среднего — считать нечем")
+check("Только средние — «доказано» не пишется ни при каких условиях",
+      not any("ПРИРОСТ ДОКАЗАТЕЛЕН" in n for n in _n_nosd) and
+      any("РАЗБРОСА НЕТ" in n or "ДОКАЗАТЕЛЬНОСТЬ НЕ ПРОВЕРЕНА" in n for n in _n_nosd),
+      "у рубля разброс из среднего не выводится")
 
 _thr = calc.mde_mean(2.0 * _cfg["unit_economics"]["monthly_turnover"], 14000)
 _cv = json.loads(json.dumps(_beh)); _cv["pilot"]["metric_cv"] = 2.0
@@ -878,6 +878,117 @@ except calc.ConfigError as e:
     _bad_err = str(e).splitlines()
 check("Хвост без своей средней отвергается: сравнивать не с чем",
       any("metrics_tail" in e for e in _bad_err))
+
+# Замеры по группам: абсолюты на начало и конец, дельты считает движок.
+# Разница «до и после» внутри группы эффектом не является — за срок пилота
+# клиенты стали старше, прошёл сезон, изменился рынок.
+_gr = json.loads(json.dumps(_cfg))
+_gr["pilot"].pop("metrics", None)
+_gr["pilot"].pop("metrics_are", None)
+_gr["pilot"].update({"control_group": True, "randomized": True,
+                     "matched_at_baseline": True, "duration_months": 8,
+                     "sample_size": 14000, "control_size": 14000, "groups": [
+    {"name": "Молодёжная карта", "role": "test", "metric": "monthly_turnover",
+     "value_start": 22000, "value_end": 27400},
+    {"name": "Обычная карта", "role": "control", "metric": "monthly_turnover",
+     "value_start": 21800, "value_end": 24000}]})
+_grr = calc.apply_pilot(calc.validate_config(json.loads(json.dumps(_gr))))
+check("Эффект считается как разница разниц, а не рост внутри группы",
+      _grr["pilot"]["metrics"]["monthly_turnover"] == 3200.0,
+      "тест вырос на 5 400, контроль сам на 2 200 — «до/после» завысило бы на 69%")
+check("Посчитанное из абсолютов помечается приростом само",
+      _grr["pilot"]["metrics_are"] == "uplift",
+      "спрашивать «уровень или прирост» тут уже нечего")
+check("Разница разниц объяснена, а не просто посчитана",
+      any("РАЗНИЦА РАЗНИЦ" in n for n in _grr["_notes"]))
+check("Выравнивание проверено по числам, а не принято на слово",
+      any("ВЫРАВНИВАНИЕ ПОДТВЕРЖДЕНО ЗАМЕРОМ" in n for n in _grr["_notes"]))
+check("Сказано, что это уровень на конец окна, а не средняя за срок",
+      any("ЭТО УРОВЕНЬ НА КОНЕЦ ОКНА" in n for n in _grr["_notes"]),
+      "при выровненных группах средняя за окно занижает полку")
+
+_skew = json.loads(json.dumps(_gr))
+_skew["pilot"]["groups"][0]["value_start"] = 26000        # разошлись ещё до пилота
+check("Расхождение групп на старте названо вслух",
+      any("ГРУППЫ РАЗОШЛИСЬ НА СТАРТЕ" in n
+          for n in calc.apply_pilot(calc.validate_config(_skew))["_notes"]))
+
+_noctl = json.loads(json.dumps(_gr))
+_noctl["pilot"]["groups"] = [_noctl["pilot"]["groups"][0]]
+_nc = calc.apply_pilot(calc.validate_config(_noctl))
+check("Группа без контроля даёт рост, а не эффект — и так и написано",
+      any("РОСТ БЕЗ КОНТРОЛЯ — НЕ ЭФФЕКТ" in n for n in _nc["_notes"]) and
+      "monthly_turnover" not in (_nc["pilot"].get("metrics") or {}),
+      "иначе взросление клиентов и сезон уехали бы в эффект инициативы")
+
+check("apply_pilot не портит поданный ему конфиг",
+      "metrics" not in json.loads(json.dumps(_gr))["pilot"],
+      "функция копирует вход — иначе правки уезжают в исходный объект")
+
+_gpage = client.get(f"/initiative/{iid}/pilot").text
+for _f in ("name", "role", "metric", "value_start", "value_end"):
+    check(f"Колонка замеров «{_f}» есть в форме",
+          f'name="pgroup.0.{_f}"' in _gpage)
+
+# Недостающих цифр не будет. Тогда спрашиваем не «доказано ли», а «что должно быть
+# верно, чтобы было доказано» — обе обратные задачи считаются из того, что уже есть.
+check("Критический разброс считается из прироста, уровня и размера групп",
+      abs(calc.critical_cv(1800, 24000, 14000) - 2.22) < 0.01,
+      "прирост 1 800 к уровню 24 000 различим, пока разброс не выше 2,2×")
+check("Больше групп — выше допустимый разброс",
+      calc.critical_cv(1800, 24000, 56000) > calc.critical_cv(1800, 24000, 14000))
+check("Без разброса движок отвечает обратной задачей, а не молчанием",
+      any("РАЗБРОСА НЕТ — СЧИТАЕМ ОБРАТНОЕ" in n for n in _n_nosd),
+      "утверждение о базе можно проверить качественно, не имея новых цифр")
+
+def _npv_at(ready_cfg, decay):
+    c = json.loads(json.dumps(ready_cfg))
+    c["base_activation"]["decay_months"] = decay
+    return calc.evaluate(c)[1]["npv"]
+
+
+_be_cfg = json.loads(json.dumps(_beh))
+_be_cfg["base_activation"] = {
+    "name": "Против обычной карты", "eligible_clients": 500000,
+    "reach_share": 1.0, "technically_reachable": 1.0, "uplift_rate": 1.0,
+    "attribution_share": 1.0, "turnover_before": 0, "turnover_after": 1800,
+    "balance_before": 0, "balance_after": 4000, "decay_months": 18}
+_be_res = calc.analyze(calc.resolve_segments(calc.normalize(
+    calc.apply_pilot(calc.validate_config(_be_cfg)))))
+_be_lines = [v for v in _be_res["validation"]
+             if "СРОК ЖИЗНИ ЭФФЕКТА" in v or "РЕШЕНИЕ ДЕРЖИТСЯ" in v]
+check("Движок сам говорит, при каком сроке жизни эффекта меняется решение",
+      len(_be_lines) == 1, _be_lines[0][:100] if _be_lines else "молчит")
+_be_ready = calc.resolve_segments(calc.normalize(
+    calc.apply_pilot(calc.validate_config(json.loads(json.dumps(_be_cfg))))))
+_be_val = calc.breakeven_decay(_be_ready)
+check("Сказанное согласовано с посчитанным, а не написано на всякий случай",
+      ("НА РЕШЕНИЕ НЕ ВЛИЯЕТ" in _be_lines[0]) == (_be_val is None),
+      f"порог {_be_val} мес" if _be_val else "знак NPV от срока не зависит")
+if _be_val is not None:
+    check("Порог назван числом и соотнесён с окном замера",
+          f"{_be_val:g}" in _be_lines[0] and
+          ("окна замера" in _be_lines[0] or "пределами наблюдения" in _be_lines[0]),
+          "порог, которого не наблюдали, — это допущение, а не вывод")
+
+# конфиг, где порог заведомо есть: эффект достаточно велик, чтобы перевернуть знак
+_case = json.loads(Path(ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))
+_case["base_activation"] = dict(_be_cfg["base_activation"], eligible_clients=500000)
+_case_ready = calc.resolve_segments(calc.normalize(
+    calc.apply_pilot(calc.validate_config(_case))))
+_case_be = calc.breakeven_decay(_case_ready)
+check("На кейсе с крупным эффектом порог окупаемости находится",
+      _case_be is not None and 1 < _case_be < 36, f"{_case_be} мес")
+check("Порог — это действительно смена знака NPV, а не подобранное число",
+      _npv_at(_case_ready, _case_be + 3) > 0 > _npv_at(_case_ready, max(1, _case_be - 3)),
+      "дольше порога окупается, короче — нет")
+
+_flat_npv = json.loads(json.dumps(_be_cfg))
+_flat_npv["base_activation"]["eligible_clients"] = 1
+check("Если знак NPV от срока не зависит — так и сказано, а не выдумано число",
+      calc.breakeven_decay(calc.resolve_segments(calc.normalize(
+          calc.apply_pilot(calc.validate_config(_flat_npv))))) is None,
+      "уточнять срок незачем: решение держится на другом")
 
 # Срок жизни эффекта — самое большое допущение расчёта, и оно должно быть видно
 # среди драйверов, а не спрятано. Движение на ±25% для него бессмысленно:

@@ -125,6 +125,51 @@
     кто пилот проводил, — поэтому спрашиваем.</p>
     <p class="hint">Прирост поведения — это не то же, что конверсия: он считается блоком
     «Растранзачивание своей базы» на шаге допущений, где задаются «до» и «после».</p>
+    <h2>Замеры по группам</h2>
+    <p class="hint">Абсолютные уровни на начало и конец пилота — дельту движок посчитает
+    сам, и не одну. Разница «до и после» внутри группы <b>эффектом не является</b>:
+    за срок пилота клиенты стали старше, прошёл сезон, изменился рынок. Контрольная
+    группа прожила ровно тот же срок, поэтому эффект — это разница разниц.
+    Строки добавляются по одной; группу без пары «контроль» движок посчитает, но скажет,
+    что это рост, а не эффект.</p>
+    <div class="scroll">
+    <table class="params rows">
+      <thead><tr><th>Группа</th><th>Роль</th><th>Что мерили</th>
+        <th class="r">На начало</th><th class="r">На конец</th></tr></thead>
+      <tbody>
+      {% for i in range((pilot.groups or []) | length + 2) %}
+        {% set gr = (pilot.groups or [])[i] if i < ((pilot.groups or []) | length) else {} %}
+        <tr>
+          <td><input name="pgroup.{{ i }}.name" value="{{ gr.get('name', '') }}"
+                     placeholder="Молодёжная карта"></td>
+          <td>
+            <select name="pgroup.{{ i }}.role">
+              <option value="test" {{ 'selected' if gr.get('role') != 'control' }}>тест</option>
+              <option value="control" {{ 'selected' if gr.get('role') == 'control' }}>контроль</option>
+            </select>
+          </td>
+          <td>
+            <select name="pgroup.{{ i }}.metric">
+              {% for k in metric_choices %}
+              <option value="{{ k }}" {{ 'selected' if k == gr.get('metric') }}>
+                {{ metric_labels.get(k, k) }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td class="r"><input name="pgroup.{{ i }}.value_start" inputmode="decimal"
+                               value="{{ gr.get('value_start', '') }}"></td>
+          <td class="r"><input name="pgroup.{{ i }}.value_end" inputmode="decimal"
+                               value="{{ gr.get('value_end', '') }}"></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <p class="hint">Разрыв между группами <b>на старте</b> движок проверит отдельно:
+    если выравнивание сработало, он около нуля, и это проверка по вашим же числам,
+    а не заявление о дизайне. Посчитанный так эффект — уровень <b>на конец окна</b>,
+    то есть оценка полки, а не средняя за срок.</p>
+
     <label class="field">
       <span>Хвост окна — сколько последних месяцев замера взяты отдельно</span>
       <input name="pilot.tail_months" inputmode="decimal" placeholder="2–3"
