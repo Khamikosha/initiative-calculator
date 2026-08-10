@@ -1,0 +1,54 @@
+# Инвариант «движок и книга считают одно и то же» держался на том, что кто-то помнит
+# про `make check-all`. На команде это перестаёт работать в первую же неделю.
+#
+# Отдельная причина завести CI сейчас: регрессия с именами полей канала прожила
+# от коммита до живого теста, потому что прогон был ручным. Проверка разметки уже
+# написана — осталось гонять её без участия человека.
+name: Тесты
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Установить зависимости
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Стресс-тесты движка
+        run: make test
+
+      - name: Веб-путь
+        run: make test-web
+
+      # Самая долгая проверка: книга пересобирается и пересчитывается под каждый кейс.
+      # `formulas` тратит около 35 секунд на книгу, поэтому она идёт последней —
+      # быстрые тесты должны падать раньше и экономить ожидание.
+      - name: Сверка Excel с движком
+        run: make check-all
+
+      # Копия движка в навыке обязана совпадать с src/ побайтово. `make sync` не должен
+      # ничего менять на чистом дереве: если изменил — синхронизацию забыли в коммите.
+      - name: Навык синхронизирован с движком
+        run: |
+          make sync
+          git diff --exit-code || {
+            echo "::error::Копия движка в навыке отстала. Выполните make sync и закоммитьте."
+            exit 1
+          }
