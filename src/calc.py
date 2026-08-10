@@ -819,6 +819,7 @@ def apply_pilot(cfg):
     # мы переносим хорошую новость, тем хуже становится база, которая была и без пилота.
     # Правильно: 55% + (61% − 55%) × 0,75 = 59,5%. Осторожность применяется к дельте.
     # --- замеры по группам → разница разниц ------------------------------------
+    derived_out = {}
     groups = p.get("groups") or []
     if groups:
         by_metric = {}
@@ -844,6 +845,8 @@ def apply_pilot(cfg):
             gap0 = (sum(g(r, "value_start") for r in tests) / len(tests)
                     - sum(g(r, "value_start") for r in ctrls) / len(ctrls))
             derived[metric] = did
+            derived_out[metric] = {"test": round(d_test, 2), "control": round(d_ctrl, 2),
+                                   "effect": round(did, 2), "gap_at_start": round(gap0, 2)}
             notes.append(
                 f"РАЗНИЦА РАЗНИЦ: {metric} — тест {nf(d_test)}, контроль {nf(d_ctrl)}, "
                 f"эффект {nf(did)}. Контроль прожил тот же срок, поэтому сезон, взросление "
@@ -874,6 +877,7 @@ def apply_pilot(cfg):
             p["metrics_are"] = "uplift"
 
     metrics_are = p.get("metrics_are")
+    skipped = []
     for k, v in (p.get("metrics") or {}).items():
         sec = PILOT_TARGET.get(k)
         if not sec:
@@ -882,6 +886,12 @@ def apply_pilot(cfg):
         # растранзачивание базы (turnover_before/after), а подстановка в юнит-экономику
         # даст клиента с оборотом в размер прироста. Молча этого не делаем.
         if metrics_are == "uplift" and k in PILOT_LEVEL_METRICS:
+            # Блок «что дал пилот» обязан показывать и то, чего он не дал. Иначе
+            # человек видит короткий список перенесённого и считает, что это всё,
+            # что пилот измерил, — а самая денежная метрика тихо осталась за кадром.
+            skipped.append({"param": f"{sec}.{k}", "pilot_value": v,
+                            "why": "прирост против контроля, а параметр модели — "
+                                   "уровень: считается растранзачиванием базы"})
             notes.append(
                 f"ПРИРОСТ НЕ ПОДСТАВЛЕН КАК УРОВЕНЬ: {sec}.{k} = {v:.6g} объявлен приростом "
                 "против контрольной группы, а этот параметр модели — абсолютный уровень. "
@@ -1063,7 +1073,8 @@ def apply_pilot(cfg):
                      "от аудитории раскатки, разница в конверсии объясняется отбором, "
                      "а не продуктом. На холодной аудитории результат будет ниже.")
 
-    cfg["_pilot"] = {"decay_from_tail": decay_est or None,
+    cfg["_pilot"] = {"decay_from_tail": decay_est or None, "skipped": skipped,
+                     "derived": derived_out or None,
                      "name": label, "grade": grade, "scale_haircut": haircut,
                      "same_geography": same_geo, "control_group": bool(p.get("control_group")),
                      "applied": applied, "power": power, "uplift": uplift}
@@ -1131,6 +1142,22 @@ def normalize(cfg):
     return cfg
 
 
+def prepare(cfg):
+    """Единственная сборка конфига к расчёту: проверка → пилот → производные → сегменты.
+
+    Была продублирована: CLI собирал так, а веб — `resolve_segments(validate_config(cfg))`,
+    без пилота и без normalize. То есть в приложении пилот НЕ ПРИМЕНЯЛСЯ ВОВСЕ: блок
+    «что дал пилот» на экране результата не мог появиться в принципе, а баланс не
+    выводился из оборота. Тесты этого не видели, потому что дёргали `apply_pilot`
+    напрямую, минуя тот путь, которым ходит человек.
+
+    Порядок значим: normalize обязан идти между пилотом и сегментами. Пилот меняет
+    оборот, из оборота выводится баланс, и только потом сегменты сводятся в один
+    набор. Перестановка normalize в конец однажды дала расхождение с книгой 28 млн ₽.
+    """
+    return resolve_segments(normalize(apply_pilot(validate_config(cfg))))
+
+
 def load_config(src):
     """Читает кейс, проверяет по схеме и готовит к расчёту. Единственная точка входа.
 
@@ -1145,7 +1172,7 @@ def load_config(src):
     перетирал взвешенный баланс одним глобальным числом — расхождение с книгой 28 млн ₽.
     """
     cfg = json.load(open(src, encoding="utf-8")) if src else json.load(sys.stdin)
-    return resolve_segments(normalize(apply_pilot(validate_config(cfg))))
+    return prepare(cfg)
 
 
 def split_fee(split, fallback):

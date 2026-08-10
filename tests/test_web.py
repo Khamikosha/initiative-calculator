@@ -879,6 +879,21 @@ except calc.ConfigError as e:
 check("Хвост без своей средней отвергается: сравнивать не с чем",
       any("metrics_tail" in e for e in _bad_err))
 
+# Веб собирал конфиг СВОЕЙ короткой сборкой — без apply_pilot и без normalize.
+# Значит пилот в приложении не применялся вовсе, а блок «что дал пилот» не мог
+# появиться в принципе. Тесты этого не видели, потому что дёргали apply_pilot
+# напрямую, минуя путь, которым ходит человек.
+check("Веб и CLI собирают конфиг одной и той же функцией",
+      app_mod.resolved.__doc__ and "calc.prepare" in
+      __import__("inspect").getsource(app_mod.resolved),
+      "вторая сборка конфига — то же самое, что вторая модель")
+_pcfg_in = {"meta": {"name": "П", "type": "product_launch", "horizon_months": 24},
+            "pilot": {"name": "Пилот", "metrics": {"approval_rate": 0.9}}}
+check("Сборка веба применяет пилот, а не только валидирует",
+      "_pilot" in app_mod.resolved(
+          {**json.loads(json.dumps(params.defaults())), **_pcfg_in}),
+      "иначе цифры пилота молча не доезжают до расчёта")
+
 # Замеры по группам: абсолюты на начало и конец, дельты считает движок.
 # Разница «до и после» внутри группы эффектом не является — за срок пилота
 # клиенты стали старше, прошёл сезон, изменился рынок.
@@ -924,6 +939,52 @@ check("Группа без контроля даёт рост, а не эффе�
 check("apply_pilot не портит поданный ему конфиг",
       "metrics" not in json.loads(json.dumps(_gr))["pilot"],
       "функция копирует вход — иначе правки уезжают в исходный объект")
+
+# Сквозняк до экрана результата: форма → конфиг → движок → отрисованная страница.
+# Именно этого куска не хватало — все прежние проверки пилота останавливались
+# на apply_pilot и не доходили до того, что видит человек.
+_ri = int(client.post("/initiative/new", data={
+    "name": "Пилот на экране", "type": "product_launch", "product": "card"},
+    follow_redirects=False).headers["location"].split("/")[2])
+_rd = {"has_pilot": "on", "pilot.name": "Москва", "pilot.control_group": "on",
+       "pilot.randomized": "on", "pilot.matched_at_baseline": "on",
+       "pilot.sample_size": "14000", "pilot.control_size": "14000",
+       "pilot.duration_months": "8", "pilot.scale_haircut": "0,75", "action": "save"}
+for _i, (_n, _role, _v0, _v1) in enumerate(
+        [("Молодёжная карта", "test", 22000, 27400),
+         ("Обычная карта", "control", 21800, 24000)]):
+    _rd[f"pgroup.{_i}.name"] = _n
+    _rd[f"pgroup.{_i}.role"] = _role
+    _rd[f"pgroup.{_i}.metric"] = "monthly_turnover"
+    _rd[f"pgroup.{_i}.value_start"] = str(_v0)
+    _rd[f"pgroup.{_i}.value_end"] = str(_v1)
+client.post(f"/initiative/{_ri}/pilot", data=_rd, follow_redirects=False)
+client.post(f"/initiative/{_ri}/segments",
+            data={"segments": ["youth"], "seg.youth.baseline_organic_apps_m": "700"},
+            follow_redirects=False)
+client.post(f"/initiative/{_ri}/assumptions", data={
+    "costs.campaign_months": "6", "ch.0.name": "Перф", "ch.0.kind": "perform",
+    "ch.0.frk_tier": "4", "ch.0.budget": "50000000", "ch.0.cpm": "250",
+    "ch.0.ctr": "0.008", "ch.0.cr_to_app": "0.06", "action": "save"},
+    follow_redirects=False)
+_rres = client.post(f"/initiative/{_ri}/calculate", follow_redirects=False)
+_rhtml = client.get(_rres.headers["location"]).text
+check("Блок пилота доходит до экрана результата",
+      "Что дал пилот" in _rhtml)
+# Разряды форматируются НЕРАЗРЫВНЫМ пробелом — обычный в тесте не совпадёт
+# с тем, что на странице, хотя человек видит одно и то же.
+_flat_html = _rhtml.replace("\u00a0", " ").replace("\u2009", " ")
+check("Разница разниц показана с обеими группами и разрывом на старте",
+      all(x in _flat_html for x in ("разница разниц", "5 400", "2 200", "3 200")),
+      "рост теста, рост контроля и эффект — три разных числа")
+check("Показано, что перенесено в модель",
+      "Что перенесено" in _rhtml)
+check("Показано и то, что НЕ перенесено",
+      "НЕ перенесено" in _rhtml,
+      "иначе короткий список выглядит как всё, что пилот дал")
+check("Параметры подписаны по-человечески, а не ключами движка",
+      "monthly_turnover" not in _rhtml.split("Что дал пилот")[1].split("</section>")[0],
+      "название берётся из реестра")
 
 _gpage = client.get(f"/initiative/{iid}/pilot").text
 for _f in ("name", "role", "metric", "value_start", "value_end"):

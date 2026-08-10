@@ -296,12 +296,78 @@
     {% endif %}
     <tr><td>Коэффициент переноса</td><td>{{ pi.scale_haircut }} — перенесено
         {{ pi.scale_haircut | pct(0) }} прироста</td></tr>
+  </table>
+
+  {% if pi.derived %}
+  <h4>Эффект посчитан как разница разниц</h4>
+  <p class="muted">Рост внутри тестовой группы эффектом не является: за срок пилота
+  клиенты стали старше, прошёл сезон, изменился рынок. Контроль прожил тот же срок,
+  поэтому из эффекта это уже вычтено.</p>
+  <div class="scroll">
+  <table class="params">
+    <thead><tr><th>Что мерили</th><th class="r">Вырос тест</th><th class="r">Вырос контроль</th>
+      <th class="r">Эффект</th><th class="r">Разрыв на старте</th></tr></thead>
+    <tbody>
+    {% for m, d in pi.derived.items() %}
+      {% set pm = params.BY_KEY.get(('unit_economics', m)) or params.BY_KEY.get(('funnel', m)) %}
+      <tr>
+        <td>{{ pm.label if pm else m }}</td>
+        <td class="r">{{ d.test | num }}</td>
+        <td class="r">{{ d.control | num }}</td>
+        <td class="r"><b>{{ d.effect | num }}</b></td>
+        <td class="r">{{ d.gap_at_start | num }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted">Разрыв на старте — проверка выравнивания по вашим же числам, а не
+  заявление о дизайне. Эффект здесь — уровень <b>на конец окна</b>, то есть оценка полки:
+  при выровненных группах разница нарастала весь замер, и средняя за срок её занижает.</p>
+  {% endif %}
+
+  <h4>Что перенесено в модель</h4>
+  {% if pi.applied %}
+  <table class="grid">
     {% for a in pi.applied %}
-    <tr><td>{{ a.param }}</td>
+      {% set sec, key = a.param.split('.', 1) %}
+      {% set pm = params.BY_KEY.get((sec, key)) %}
+    <tr><td>{{ pm.label if pm else a.param }}
+            <span class="grade g{{ a.grade }}">{{ a.grade | replace("_minus", "−") }}</span></td>
         <td>{{ a.previous if a.previous is not none else "—" }} →
             <b>{{ a.applied_value | round(4) }}</b> (пилот давал {{ a.pilot_value }})</td></tr>
     {% endfor %}
   </table>
+  {% else %}
+  <p class="muted">Ничего: пилот проведён, но ни одна его цифра не заменила допущение
+  модели. <b>Пилот, который провели и не использовали в расчёте, — это выброшенные
+  деньги.</b></p>
+  {% endif %}
+
+  {% if pi.skipped %}
+  <h4>Что НЕ перенесено</h4>
+  <p class="muted">Пилот это измерил, но в модель оно не пошло — иначе список выше
+  выглядел бы как всё, что пилот дал.</p>
+  <table class="grid">
+    {% for sk in pi.skipped %}
+      {% set sec, key = sk.param.split('.', 1) %}
+      {% set pm = params.BY_KEY.get((sec, key)) %}
+    <tr><td>{{ pm.label if pm else sk.param }}</td>
+        <td>пилот дал {{ sk.pilot_value | num }} — {{ sk.why }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if pi.decay_from_tail %}
+  <h4>Срок жизни эффекта — из замера</h4>
+  <table class="grid">
+    {% for m, d in pi.decay_from_tail.items() %}
+      {% set pm = params.BY_KEY.get(('unit_economics', m)) %}
+    <tr><td>{{ pm.label if pm else m }}</td>
+        <td>гаснет примерно за <b>{{ d | num }}</b> мес от выдачи</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 </section>
 {% endif %}
 
