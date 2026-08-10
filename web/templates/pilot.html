@@ -33,13 +33,29 @@
   </label>
 
   <div id="pilotbody" {{ 'hidden' if not pilot }}>
+    <h2>Что пилот мерил</h2>
+    <p class="hint">С этого начинаем: от ответа зависит, какие поля вообще нужны.
+    Лишнюю половину шага просто не покажем — а всё редкое убрано под «Уточнения»,
+    и движок сам скажет, когда оно понадобится.</p>
+    <div class="kinds">
+      <label class="toggle">
+        <input type="radio" name="pilot.kind" value="conversion" class="pkind"
+               {{ 'checked' if (pilot.kind or 'conversion') == 'conversion' }}>
+        <b>Конверсию</b> — сколько откликнулось и оформило.
+        Обычная история для дистрибуции: рассылка, посадочная, канал.
+      </label>
+      <label class="toggle">
+        <input type="radio" name="pilot.kind" value="behavioral" class="pkind"
+               {{ 'checked' if pilot.kind == 'behavioral' }}>
+        <b>Поведение клиентов</b> — остатки, обороты, подключения.
+        Сравнивали тех, у кого продукт есть, с теми, у кого его нет.
+      </label>
+    </div>
+
     <h2>Что за пилот</h2>
     <div class="grid2">
       <label>Название
         <input name="pilot.name" value="{{ pilot.name or '' }}" placeholder="Пилот в Москве"></label>
-      <label>Аудитория пилота
-        <input name="pilot.audience" value="{{ pilot.audience or '' }}"
-               placeholder="действующая база, отклик на in-app"></label>
       <label>География пилота
         <input name="pilot.geography" value="{{ pilot.geography or '' }}" placeholder="Москва"></label>
       <label>География раскатки
@@ -49,48 +65,101 @@
     <p class="hint">Если география раскатки шире пилотной, движок сам понижает грейд
     до B−: это тот же перенос с чужого рынка, только внутри страны.</p>
 
-    <h2>Дизайн замера</h2>
-    <label class="toggle">
-      <input type="checkbox" name="pilot.control_group" id="ctrl"
-             {{ 'checked' if pilot.control_group }}>
-      Была контрольная группа
-    </label>
-    <p class="hint">Без неё «показал эффективность» означает «мы что-то сделали,
-    и что-то произошло». Все цифры такого пилота — грейд C.</p>
-
-    <label class="toggle">
-      <input type="checkbox" name="pilot.randomized" {{ 'checked' if pilot.randomized }}>
-      Деление на группы было случайным
-    </label>
-    <label class="toggle">
-      <input type="checkbox" name="pilot.matched_at_baseline"
-             {{ 'checked' if pilot.matched_at_baseline }}>
-      Группы выровнены на старте
-    </label>
-    <p class="hint">Если клиенты сами выбрали продукт, они и до него были активнее:
-    часть разницы объясняется отбором, а не продуктом, и на масштабе её не будет.
-    Рандомизация снимает этот вопрос целиком — тогда поправка на отбор не нужна.</p>
-
     <div class="grid2">
-      <label>Размер тестовой группы, чел
-        <input name="pilot.sample_size" value="{{ pilot.sample_size or '' }}" inputmode="numeric"></label>
-      <label>Размер контрольной группы, чел
-        <input name="pilot.control_size" value="{{ pilot.control_size or '' }}" inputmode="numeric"></label>
-      <label>Конверсия контроля, долей
-        <input name="pilot.baseline_rate" value="{{ pilot.baseline_rate or '' }}"
-               placeholder="0.52"></label>
-      <label>Конверсия теста, долей
-        <input name="pilot.observed_rate" value="{{ pilot.observed_rate or '' }}"
-               placeholder="0.61"></label>
       <label>Длительность, мес
         <input name="pilot.duration_months" value="{{ pilot.duration_months or '' }}"></label>
       <label>Коэффициент переноса на масштаб
         <input name="pilot.scale_haircut" value="{{ pilot.scale_haircut or '' }}"
                placeholder="0.75"></label>
+      <label>Клиентов в тестовой группе
+        <input name="pilot.sample_size" value="{{ pilot.sample_size or '' }}"
+               inputmode="numeric"></label>
+      <label>Клиентов в контрольной группе
+        <input name="pilot.control_size" value="{{ pilot.control_size or '' }}"
+               inputmode="numeric"></label>
     </div>
+    <p class="hint">Размеры групп нужны обоим типам пилота: без них движок не может
+    сказать, отличим ли результат от шума. Пилот на 800 человек не ловит два пункта
+    конверсии, и «показал эффективность» там означает «мы что-то увидели».</p>
     <p class="hint">Коэффициент режет <b>прирост</b>, а не уровень: пилот дал 61% при
     заложенных 55% и коэффициенте 0,75 → 59,5%. Единица означает перенос один к одному —
     это допущение, а не его отсутствие.</p>
+
+    <div class="branch" data-kind="conversion">
+      <h2>Что показала конверсия</h2>
+      <div class="grid2">
+        <label>Конверсия контроля, долей
+          <input name="pilot.baseline_rate" value="{{ pilot.baseline_rate or '' }}"
+                 placeholder="0.52"></label>
+        <label>Конверсия теста, долей
+          <input name="pilot.observed_rate" value="{{ pilot.observed_rate or '' }}"
+                 placeholder="0.61"></label>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" name="pilot.control_group"
+               {{ 'checked' if pilot.control_group }}>
+        Была контрольная группа
+      </label>
+      <p class="hint">Без неё «показал эффективность» означает «мы что-то сделали,
+      и что-то произошло»: отделить эффект от сезона и органики нечем, и все цифры
+      такого пилота — грейд C.</p>
+    </div>
+
+    <div class="branch" data-kind="behavioral">
+      <h2>Замеры по группам</h2>
+      <p class="hint">Абсолютные уровни на начало и конец пилота — дельту движок посчитает
+      сам. Разница «до и после» внутри группы <b>эффектом не является</b>: за срок пилота
+      клиенты стали старше, прошёл сезон, изменился рынок. Строка с ролью «контроль»
+      и есть контрольная группа — отдельной галочки не нужно.</p>
+      <div class="scroll">
+      <table class="params rows">
+        <thead><tr><th>Группа</th><th>Роль</th><th>Что мерили</th>
+          <th class="r">На начало</th><th class="r">На конец</th></tr></thead>
+        <tbody>
+        {% for i in range((pilot.groups or []) | length + 2) %}
+          {% set gr = (pilot.groups or [])[i] if i < ((pilot.groups or []) | length) else {} %}
+          <tr>
+            <td><input name="pgroup.{{ i }}.name" value="{{ gr.get('name', '') }}"
+                       placeholder="Молодёжная карта"></td>
+            <td>
+              <select name="pgroup.{{ i }}.role">
+                <option value="test" {{ 'selected' if gr.get('role') != 'control' }}>тест</option>
+                <option value="control" {{ 'selected' if gr.get('role') == 'control' }}>контроль</option>
+              </select>
+            </td>
+            <td>
+              <select name="pgroup.{{ i }}.metric">
+                {% for k in metric_choices %}
+                <option value="{{ k }}" {{ 'selected' if k == gr.get('metric') }}>
+                  {{ metric_labels.get(k, k) }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="r"><input name="pgroup.{{ i }}.value_start" inputmode="decimal"
+                                 value="{{ gr.get('value_start', '') }}"></td>
+            <td class="r"><input name="pgroup.{{ i }}.value_end" inputmode="decimal"
+                                 value="{{ gr.get('value_end', '') }}"></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" name="pilot.randomized" {{ 'checked' if pilot.randomized }}>
+        Деление на группы было случайным
+      </label>
+      <label class="toggle">
+        <input type="checkbox" name="pilot.matched_at_baseline"
+               {{ 'checked' if pilot.matched_at_baseline }}>
+        Группы выровнены на старте
+      </label>
+      <p class="hint">Если клиенты сами выбрали продукт, они и до него были активнее:
+      часть разницы объясняется отбором, а не продуктом, и на масштабе её не будет.
+      Рандомизация снимает этот вопрос целиком.</p>
+    </div>
+
+    <details class="fold">
+      <summary>Уточнения — нужны редко, движок скажет, если понадобятся</summary>
 
     <label class="field">
       <span>Разброс метрик в рублях (отношение к среднему)</span>
@@ -125,51 +194,6 @@
     кто пилот проводил, — поэтому спрашиваем.</p>
     <p class="hint">Прирост поведения — это не то же, что конверсия: он считается блоком
     «Растранзачивание своей базы» на шаге допущений, где задаются «до» и «после».</p>
-    <h2>Замеры по группам</h2>
-    <p class="hint">Абсолютные уровни на начало и конец пилота — дельту движок посчитает
-    сам, и не одну. Разница «до и после» внутри группы <b>эффектом не является</b>:
-    за срок пилота клиенты стали старше, прошёл сезон, изменился рынок. Контрольная
-    группа прожила ровно тот же срок, поэтому эффект — это разница разниц.
-    Строки добавляются по одной; группу без пары «контроль» движок посчитает, но скажет,
-    что это рост, а не эффект.</p>
-    <div class="scroll">
-    <table class="params rows">
-      <thead><tr><th>Группа</th><th>Роль</th><th>Что мерили</th>
-        <th class="r">На начало</th><th class="r">На конец</th></tr></thead>
-      <tbody>
-      {% for i in range((pilot.groups or []) | length + 2) %}
-        {% set gr = (pilot.groups or [])[i] if i < ((pilot.groups or []) | length) else {} %}
-        <tr>
-          <td><input name="pgroup.{{ i }}.name" value="{{ gr.get('name', '') }}"
-                     placeholder="Молодёжная карта"></td>
-          <td>
-            <select name="pgroup.{{ i }}.role">
-              <option value="test" {{ 'selected' if gr.get('role') != 'control' }}>тест</option>
-              <option value="control" {{ 'selected' if gr.get('role') == 'control' }}>контроль</option>
-            </select>
-          </td>
-          <td>
-            <select name="pgroup.{{ i }}.metric">
-              {% for k in metric_choices %}
-              <option value="{{ k }}" {{ 'selected' if k == gr.get('metric') }}>
-                {{ metric_labels.get(k, k) }}</option>
-              {% endfor %}
-            </select>
-          </td>
-          <td class="r"><input name="pgroup.{{ i }}.value_start" inputmode="decimal"
-                               value="{{ gr.get('value_start', '') }}"></td>
-          <td class="r"><input name="pgroup.{{ i }}.value_end" inputmode="decimal"
-                               value="{{ gr.get('value_end', '') }}"></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    <p class="hint">Разрыв между группами <b>на старте</b> движок проверит отдельно:
-    если выравнивание сработало, он около нуля, и это проверка по вашим же числам,
-    а не заявление о дизайне. Посчитанный так эффект — уровень <b>на конец окна</b>,
-    то есть оценка полки, а не средняя за срок.</p>
-
     <label class="field">
       <span>Хвост окна — сколько последних месяцев замера взяты отдельно</span>
       <input name="pilot.tail_months" inputmode="decimal" placeholder="2–3"
@@ -205,6 +229,15 @@
       </tbody>
     </table>
     <p><button type="button" class="ghost" id="addmetric">+ Показатель</button></p>
+
+    <label class="field">
+      <span>Аудитория пилота</span>
+      <input name="pilot.audience" value="{{ pilot.audience or '' }}"
+             placeholder="действующая база, отклик на in-app">
+    </label>
+    <p class="hint">На расчёт не влияет, но если аудитория пилота отличается
+    от аудитории раскатки, движок про это напомнит.</p>
+    </details>
   </div>
 
   <div class="actions">
@@ -250,6 +283,24 @@ const CHOICES = {{ metric_choices | tojson }};
 const LABELS = {{ metric_labels | tojson }};
 
 has.addEventListener('change', () => { body.hidden = !has.checked; preview(); });
+
+// Ветка решается ОДНИМ вопросом наверху. Скрытые поля не отправляются как пустые
+// строки — они отправляются как есть, поэтому перед сохранением чистим чужую ветку:
+// иначе движок увидит и конверсию, и групповые замеры и справедливо отвергнет конфиг.
+function showBranch() {
+  const kind = document.querySelector('.pkind:checked')?.value || 'conversion';
+  document.querySelectorAll('.branch').forEach(b => {
+    b.hidden = b.dataset.kind !== kind;
+  });
+}
+document.querySelectorAll('.pkind').forEach(r =>
+  r.addEventListener('change', () => { showBranch(); preview(); }));
+showBranch();
+
+document.getElementById('pilotform').addEventListener('submit', () => {
+  document.querySelectorAll('.branch[hidden] input, .branch[hidden] select')
+    .forEach(el => { if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
+});
 
 function renumber() {
   [...metrics.querySelectorAll('tr.metric')].forEach((tr, i) => {

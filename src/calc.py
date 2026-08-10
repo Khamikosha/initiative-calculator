@@ -342,7 +342,14 @@ PILOT_KEYS = {"name": None, "geography": None, "rollout_geography": None,
               "scale_haircut": (0.0, 2.0), "metrics": None, "metrics_are": None,
               "randomized": None, "matched_at_baseline": None,
               "metric_cv": (0.0, 20.0),
-              "tail_months": (0.0, 600.0), "metrics_tail": None, "groups": None}
+              "tail_months": (0.0, 600.0), "metrics_tail": None, "groups": None,
+              "kind": None}
+
+# Что пилот мерил. Вопрос задаётся ПЕРВЫМ и решает, какие поля вообще показывать:
+# у конверсионного пилота нет групповых замеров, у поведенческого нет конверсии.
+# Без этого разделения шаг просит шестнадцать полей у человека, которому нужны шесть,
+# и он не знает, какие именно.
+PILOT_KINDS = ("conversion", "behavioral")
 
 # Замер по группе: абсолютные уровни на начало и конец пилота. Дельту движок считает
 # сам, и не одну, а две — и в этом весь смысл.
@@ -527,6 +534,19 @@ def validate_config(cfg):
                 errs.append("pilot.metrics: должен быть объектом {параметр: значение}.")
             else:
                 _check_keys(mt, {**FUNNEL_KEYS, **UE_KEYS}, "pilot.metrics", errs)
+        _kind = pil.get("kind")
+        if _kind is not None and _kind not in PILOT_KINDS:
+            errs.append(f"pilot.kind: «conversion» (мерили конверсию) или «behavioral» "
+                        f"(мерили поведение клиентов), получено «{_kind}».")
+        _has_groups = bool(pil.get("groups"))
+        _has_rates = bool(g(pil, "observed_rate") or g(pil, "baseline_rate"))
+        if _kind == "conversion" and _has_groups:
+            errs.append("pilot.groups: пилот объявлен конверсионным, но заполнены "
+                        "групповые замеры. Одно из двух лишнее — выберите, что мерили.")
+        if _kind == "behavioral" and _has_rates:
+            errs.append("pilot.baseline_rate / observed_rate: пилот объявлен "
+                        "поведенческим, но заполнена конверсия. Одно из двух лишнее — "
+                        "выберите, что мерили.")
         _ma = pil.get("metrics_are")
         if _ma is not None and _ma not in PILOT_METRICS_ARE:
             errs.append(f"pilot.metrics_are: допустимо «level» (уровень в тестовой группе) "
@@ -564,8 +584,11 @@ def validate_config(cfg):
                         f"pilot.tail_months: {_tm:g} при длительности замера {_dm:g} — "
                         "хвост это последние НЕСКОЛЬКО месяцев окна, он должен быть "
                         "больше нуля и меньше самого окна.")
+        _ctrl_row = any(isinstance(gr, dict) and gr.get("role") == "control"
+                        for gr in (pil.get("groups") or []))
+        _has_ctrl = bool(pil.get("control_group")) or _ctrl_row
         _lvl = sorted(set(pil.get("metrics") or {}) & PILOT_LEVEL_METRICS)
-        if _lvl and pil.get("control_group") and _ma is None:
+        if _lvl and _has_ctrl and _ma is None and not _has_groups:
             errs.append(
                 "pilot.metrics_are: у пилота есть контрольная группа и метрики-уровни "
                 f"({', '.join(_lvl)}) — непонятно, что в них записано. «Средний оборот "
@@ -818,6 +841,12 @@ def apply_pilot(cfg):
     # осторожный коэффициент 0,75 превращает это в 45,75% — то есть чем аккуратнее
     # мы переносим хорошую новость, тем хуже становится база, которая была и без пилота.
     # Правильно: 55% + (61% − 55%) × 0,75 = 59,5%. Осторожность применяется к дельте.
+    # У поведенческого пилота контрольная группа — это строка с ролью «контроль».
+    # Отдельная галочка рядом с таблицей позволяла бы противоречить самому себе:
+    # галочка снята, строка контроля есть.
+    if any(gr.get("role") == "control" for gr in (p.get("groups") or [])):
+        p["control_group"] = True
+
     # --- замеры по группам → разница разниц ------------------------------------
     derived_out = {}
     groups = p.get("groups") or []

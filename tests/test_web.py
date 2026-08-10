@@ -879,6 +879,67 @@ except calc.ConfigError as e:
 check("Хвост без своей средней отвергается: сравнивать не с чем",
       any("metrics_tail" in e for e in _bad_err))
 
+# Шаг пилота просил 16 полей и две таблицы у человека, которому нужна половина,
+# и он не знал, какая именно. Развилка задаётся ОДНИМ вопросом наверху.
+_kpage = client.get(f"/initiative/{iid}/pilot").text
+check("Первым задаётся вопрос, что пилот мерил",
+      'name="pilot.kind"' in _kpage and
+      _kpage.index('name="pilot.kind"') < _kpage.index('name="pilot.scale_haircut"'),
+      "от ответа зависит, какие поля вообще показывать")
+check("Ветки размечены и различимы",
+      'data-kind="conversion"' in _kpage and 'data-kind="behavioral"' in _kpage)
+_conv = _kpage.split('data-kind="conversion"')[1].split('data-kind="behavioral"')[0]
+_beh_html = _kpage.split('data-kind="behavioral"')[1]
+check("Конверсия живёт только в своей ветке",
+      'name="pilot.observed_rate"' in _conv and 'name="pilot.observed_rate"' not in _beh_html)
+check("Групповые замеры живут только в своей",
+      'name="pgroup.0.name"' in _beh_html and 'name="pgroup.0.name"' not in _conv)
+check("Размеры групп общие: без них ни один тип пилота не проверить на шум",
+      'name="pilot.sample_size"' in _kpage.split('data-kind="conversion"')[0],
+      "мощность выборки нужна и конверсии, и поведению")
+# ищем по разметке раскрытия, а не по слову «Уточнения»: оно есть и в подводке,
+# и срез между вхождениями попадал мимо блока
+_fold = _kpage.split('<details class="fold">')[-1]
+check("Редкое убрано под раскрытие, а не выброшено",
+      "Уточнения" in _kpage and
+      all(f'name="pilot.{k}"' in _fold
+          for k in ("metric_cv", "tail_months", "metrics_are", "audience")))
+
+# Конфликт веток чистится на СЕРВЕРЕ: скрытые поля всё равно уходят с формой,
+# а конфиг с обеими ветками движок отвергнет — человек при этом видел половину
+# и не поймёт, о чём речь.
+_ki = int(client.post("/initiative/new", data={
+    "name": "Ветки", "type": "product_launch", "product": "card"},
+    follow_redirects=False).headers["location"].split("/")[2])
+_kd = {"has_pilot": "on", "pilot.kind": "behavioral", "pilot.name": "М",
+       "pilot.baseline_rate": "0,52", "pilot.observed_rate": "0,61",
+       "pgroup.0.name": "МК", "pgroup.0.role": "test",
+       "pgroup.0.metric": "monthly_turnover",
+       "pgroup.0.value_start": "22000", "pgroup.0.value_end": "27400",
+       "pgroup.1.name": "ОК", "pgroup.1.role": "control",
+       "pgroup.1.metric": "monthly_turnover",
+       "pgroup.1.value_start": "21800", "pgroup.1.value_end": "24000",
+       "action": "save"}
+_kr = client.post(f"/initiative/{_ki}/pilot", data=_kd, follow_redirects=False)
+_kcfg = json.loads(_db.get_initiative(_db.connect(), _ki)["config_json"])
+check("Поля чужой ветки не сохраняются и не ломают конфиг",
+      "error=" not in _kr.headers.get("location", "") and
+      "observed_rate" not in _kcfg["pilot"] and len(_kcfg["pilot"]["groups"]) == 2)
+check("Контроль у поведенческого пилота — это строка «контроль», а не галочка",
+      calc.apply_pilot(calc.validate_config(json.loads(json.dumps(_kcfg))))
+      ["pilot"]["control_group"] is True,
+      "иначе можно снять галочку при заполненной строке контроля и противоречить себе")
+
+_mix = json.loads(json.dumps(_kcfg))
+_mix["pilot"]["kind"] = "conversion"
+try:
+    calc.validate_config(_mix); _mix_err = []
+except calc.ConfigError as e:
+    _mix_err = str(e).splitlines()
+check("Заявленный тип и заполненное содержимое сверяются",
+      any("groups" in e for e in _mix_err),
+      "конверсионный пилот с групповыми замерами — противоречие, а не данные")
+
 # Веб собирал конфиг СВОЕЙ короткой сборкой — без apply_pilot и без normalize.
 # Значит пилот в приложении не применялся вовсе, а блок «что дал пилот» не мог
 # появиться в принципе. Тесты этого не видели, потому что дёргали apply_pilot

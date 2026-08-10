@@ -588,6 +588,9 @@ def form_to_pilot(form, cfg):
     _ma = (form.get("pilot.metrics_are") or "").strip()
     if _ma:
         p["metrics_are"] = _ma
+    _kind = (form.get("pilot.kind") or "").strip()
+    if _kind:
+        p["kind"] = _kind
     for k in PILOT_FLAGS:
         p[k] = bool(form.get(f"pilot.{k}"))
     for k in ("sample_size", "control_size", "duration_months",
@@ -622,6 +625,17 @@ def form_to_pilot(form, cfg):
         j += 1
     if pg:
         p["groups"] = pg
+
+    # Чужая ветка чистится ЗДЕСЬ, а не только в браузере: скрытые поля всё равно
+    # уходят на сервер, а конфиг, где заполнены и конверсия, и групповые замеры,
+    # движок справедливо отвергает — человек при этом видел только свою половину
+    # и не поймёт, о чём речь.
+    if p.get("kind") == "conversion":
+        for k in ("groups", "randomized", "matched_at_baseline"):
+            p.pop(k, None)
+    elif p.get("kind") == "behavioral":
+        for k in ("baseline_rate", "observed_rate"):
+            p.pop(k, None)
 
     if metrics:
         p["metrics"] = metrics
