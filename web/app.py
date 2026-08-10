@@ -564,7 +564,7 @@ async def brief_save(request: Request, iid: int):
 # из движка, а не переписывается здесь: разойдясь, форма предложила бы задать то,
 # что движок отвергнет строгой валидацией.
 PILOT_METRIC_CHOICES = sorted(calc.PILOT_TARGET)
-PILOT_FLAGS = ("control_group",)
+PILOT_FLAGS = ("control_group", "randomized", "matched_at_baseline")
 PILOT_TEXT = ("name", "geography", "rollout_geography", "audience")
 
 
@@ -586,7 +586,7 @@ def form_to_pilot(form, cfg):
     for k in PILOT_FLAGS:
         p[k] = bool(form.get(f"pilot.{k}"))
     for k in ("sample_size", "control_size", "duration_months",
-              "baseline_rate", "observed_rate", "scale_haircut"):
+              "baseline_rate", "observed_rate", "scale_haircut", "metric_cv"):
         raw = form.get(f"pilot.{k}")
         if raw not in (None, ""):
             p[k] = _num(raw)

@@ -796,6 +796,58 @@ check("Доли развилка не касается: конверсия по�
       "funnel.activation_rate" in _applied_uplift,
       "у доли «уровень» и «прирост» не путаются — прирост там задан отдельными полями")
 
+# Дизайн замера, доказательность в рублях и окно наблюдения.
+# Пилот молодёжной карты: рандомизация с выравниванием, 14 000 на группу,
+# 8 месяцев (май–декабрь), только средние — разброса нет.
+_beh = json.loads(json.dumps(_cfg))
+_beh["pilot"].update({"randomized": True, "matched_at_baseline": True,
+                      "sample_size": 14000, "control_size": 14000,
+                      "duration_months": 8, "metrics_are": "uplift",
+                      "metrics": {"monthly_turnover": 1800}})
+
+
+def _notes_of(cfg):
+    return calc.apply_pilot(calc.validate_config(json.loads(json.dumps(cfg))))["_notes"]
+
+
+_n_nosd = _notes_of(_beh)
+check("Рандомизация с выравниванием снимает вопрос об отборе",
+      any("ДИЗАЙН" in n and "поправка на отбор не нужна" in n for n in _n_nosd))
+_selfsel = json.loads(json.dumps(_beh)); _selfsel["pilot"]["randomized"] = False
+check("Без рандомизации движок называет отбор отбором",
+      any("ОТБОР ВМЕСТО ЭФФЕКТА" in n for n in _notes_of(_selfsel)))
+check("Только средние — доказательность честно не проверена, а не «доказано»",
+      any("ДОКАЗАТЕЛЬНОСТЬ НЕ ПРОВЕРЕНА" in n for n in _n_nosd) and
+      not any("ПРИРОСТ ДОКАЗАТЕЛЕН" in n for n in _n_nosd),
+      "у рубля разброс не выводится из среднего — считать нечем")
+
+_thr = calc.mde_mean(2.0 * _cfg["unit_economics"]["monthly_turnover"], 14000)
+_cv = json.loads(json.dumps(_beh)); _cv["pilot"]["metric_cv"] = 2.0
+_cv["pilot"]["metrics"] = {"monthly_turnover": round(_thr * 1.2)}
+check("С заданным разбросом доказательность считается",
+      any("ПРИРОСТ ДОКАЗАТЕЛЕН" in n for n in _notes_of(_cv)),
+      f"порог {_thr:,.0f} ₽ при 14 000 на группу")
+_small = json.loads(json.dumps(_cv))
+_small["pilot"]["metrics"] = {"monthly_turnover": round(_thr * 0.5)}
+check("Малый прирост при том же разбросе объявлен неотличимым от шума",
+      any("НЕОТЛИЧИМ ОТ ШУМА" in n for n in _notes_of(_small)),
+      "половина порога на тех же группах — это шум, а не эффект")
+check("Порог различимости считает движок и он зависит от размера групп",
+      calc.mde_mean(2.0 * 24000, 14000) > calc.mde_mean(2.0 * 24000, 56000),
+      f"14 000 на группу: {calc.mde_mean(2.0 * 24000, 14000):,.0f} ₽, "
+      f"56 000: {calc.mde_mean(2.0 * 24000, 56000):,.0f} ₽")
+
+check("Восемь месяцев из двенадцати названы неполным годом",
+      any("ОКНО НАБЛЮДЕНИЯ" in n for n in _n_nosd),
+      "май–декабрь не покрывают год, а перенос делается как на наблюдавшиеся")
+check("Замер короче горизонта — сказано, что дальше держится по допущению",
+      any("ЗАМЕР" in n and "ГОРИЗОНТ" in n for n in _n_nosd))
+
+# поля дизайна должны быть в разметке формы, а не только в разборе (BACKLOG 40)
+_ppage = client.get(f"/initiative/{iid}/pilot").text
+for _f in ("randomized", "matched_at_baseline", "metric_cv", "metrics_are"):
+    check(f"Поле пилота «{_f}» есть в форме", f'name="pilot.{_f}"' in _ppage)
+
 check("Коэффициент переноса режет прирост, а не уровень",
       abs(_probe["funnel"]["activation_rate"] - (0.65 + (0.61 - 0.65) * 0.75)) < 1e-9,
       f'получилось {_probe["funnel"]["activation_rate"]}')
