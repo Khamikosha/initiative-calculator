@@ -278,3 +278,10 @@ details.nested > summary { font-size: 15px; }
 .params.rows td { padding: 3px 4px; }
 .params.rows input { width: 100%; }
 .params.rows.season th, .params.rows.season td { min-width: 56px; }
+
+/* Выбор источников эффекта: одно решение в строку вместо четырёх карточек подряд. */
+.sources { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 10px 0 4px; }
+.sources .toggle { margin: 0; }
+.srcblock { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e5e5e5; }
+.srcblock h4 { margin: 0 0 8px; }
+.callout.minimum { background: #f0f6ff; border-color: var(--accent); }

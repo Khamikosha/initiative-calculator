@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+import re
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -419,6 +420,47 @@ check("Маржа спутника попадает в расчёт отдель
       (_cres["pl"].get("margin_sources") or {}).get("companion", 0) > 0,
       f'{(_cres["pl"].get("margin_sources") or {}).get("companion", 0):,.0f} ₽')
 
+
+# ------------------------------- Нагрузка шага «Допущения» (BACKLOG 43)
+# Мерить надо не число полей, а сколько человек ОБЯЗАН тронуть, чтобы получить ответ.
+# На шаге 178 полей, обязательных — восемь.
+_ai = int(client.post("/initiative/new", data={
+    "name": "Нагрузка", "type": "product_launch", "product": "kids_card"},
+    follow_redirects=False).headers["location"].split("/")[2])
+client.post(f"/initiative/{_ai}/segments",
+            data={"segments": ["kids"], "seg.kids.baseline_organic_apps_m": "700"},
+            follow_redirects=False)
+_mini = {"ch.0.name": "Перф", "ch.0.kind": "perform", "ch.0.frk_tier": "4",
+         "ch.0.budget": "50000000", "ch.0.cpm": "250", "ch.0.ctr": "0.008",
+         "ch.0.cr_to_app": "0.06", "costs.campaign_months": "6", "action": "save"}
+client.post(f"/initiative/{_ai}/assumptions", data=_mini, follow_redirects=False)
+_ar = client.post(f"/initiative/{_ai}/calculate", follow_redirects=False)
+check("Восьми полей хватает, чтобы получить ответ",
+      "calculation" in _ar.headers.get("location", ""),
+      f"тронуто {len(_mini) - 1} из 178 — остальное предзаполнено")
+
+_apage = client.get(f"/initiative/{_ai}/assumptions").text
+check("Минимум объявлен на странице, а не выясняется опытом",
+      "обязательны только каналы" in _apage)
+check("Решение «нужен ли источник эффекта» принимается один раз, а не четырежды",
+      len(re.findall(r'class="srcpick"', _apage)) == len(params.EFFECT_SECTIONS) == 4,
+      "четыре карточки подряд заставляли решать четыре раза, и три раза впустую")
+check("Незадействованные источники скрыты, а не развёрнуты",
+      len(re.findall(r'class="srcblock"[^>]*hidden', _apage)) == 4,
+      "на обычной инициативе не нужен ни один из них")
+
+_on = dict(_mini)
+_on.update({"has_companion": "1", "companion.name": "Копилка",
+            "companion.attach_rate": "0.3", "companion.funded_rate": "0.6",
+            "companion.avg_balance": "12000", "companion.nim_annual": "0.06"})
+client.post(f"/initiative/{_ai}/assumptions", data=_on, follow_redirects=False)
+_apage2 = client.get(f"/initiative/{_ai}/assumptions").text
+check("Отмеченный источник разворачивается и остаётся отмеченным",
+      'data-src="companion"' in _apage2 and
+      not re.search(r'class="srcblock" data-src="companion"[^>]*hidden', _apage2),
+      "иначе заполненный блок пришлось бы искать заново при каждом возврате")
+check("Остальные источники при этом остаются свёрнутыми",
+      len(re.findall(r'class="srcblock"[^>]*hidden', _apage2)) == 3)
 
 # ------------------------------- Части неоднородной базы (BACKLOG 20)
 # Без разбиения отклик применяется ко всей базе целиком, включая ту часть, где

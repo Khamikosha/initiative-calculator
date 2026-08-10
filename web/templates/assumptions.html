@@ -157,13 +157,8 @@
 
 {% macro nested_block(section, cfg) %}
   {% set on = cfg.get(section) %}
-  <details class="card fold nested" {{ 'open' if on }}>
-    <summary><b>{{ params.nested_title(section) }}</b>
-      {% if on %}<span class="on-badge">задан</span>{% endif %}</summary>
-    <label class="field switch">
-      <input type="checkbox" name="has_{{ section }}" value="1" {{ 'checked' if on }}>
-      <span>Учитывать этот эффект в расчёте</span>
-    </label>
+  <div class="srcblock" data-src="{{ section }}" {{ '' if on else 'hidden' }}>
+    <h4>{{ params.nested_title(section) }}</h4>
     <table class="params">
       <thead><tr><th>Параметр</th><th class="r">Значение</th><th>Ед.</th><th>Что это</th></tr></thead>
       <tbody>
@@ -188,12 +183,20 @@
     </table>
     {% if section in params.PARTS_SECTIONS %}{{ parts_table(section, cfg) }}{% endif %}
     {% if section in params.SPLIT_SECTIONS %}{{ split_table(section, cfg) }}{% endif %}
-  </details>
+  </div>
 {% endmacro %}
 
 {% set tmeta = TYPE_META[init.type] %}
 <div class="callout type-note">
   <b>{{ tmeta.label }}.</b> Главный вопрос: {{ tmeta.metric }}. {{ tmeta.note }}
+</div>
+
+<div class="callout minimum">
+  <b>Чтобы получить ответ, обязательны только каналы и срок кампании.</b>
+  Для perform-канала это бюджет, CPM, CTR и конверсия в заявку; для internal — охват
+  базы, отклик и конверсия. Всё остальное на этой странице предзаполнено из реестра
+  и каталога продуктов: правьте то, что знаете точно, и не трогайте то, чего не знаете —
+  подставленное честнее выдуманного.
 </div>
 
 <h2 class="need-head">Что нужно задать</h2>
@@ -309,17 +312,22 @@
 </section>
 
 
-<h2 class="need-head">Дополнительные источники эффекта</h2>
-<p class="muted need-lead">Эффект инициативы не всегда приходит с самого продукта.
-Каждый блок отвечает на свой вопрос: <b>кто меняется и в чём меряется изменение.</b>
-Связанный клиент — платит другой человек. Спутник — зарабатывает другой продукт.
-Натуральный эффект — меряется не в деньгах и требует перевода. Партнёр — своя экономика
-на той же базе. Незаполненные блоки в расчёт не идут.</p>
-
-{{ nested_block('linked_client', cfg) }}
-{{ nested_block('companion', cfg) }}
-{{ nested_block('natural_effect', cfg) }}
-{{ nested_block('partner', cfg) }}
+<section class="card">
+  <h3>Откуда ещё приходит эффект</h3>
+  <p class="muted">По умолчанию считается только сам продукт. Отметьте лишнее — и только
+  отмеченное попросит цифры. Каждый пункт отвечает на свой вопрос: <b>кто меняется
+  и в чём меряется изменение.</b></p>
+  <div class="sources">
+    {% for sec in params.EFFECT_SECTIONS %}
+    <label class="toggle">
+      <input type="checkbox" name="has_{{ sec }}" value="1" class="srcpick"
+             data-src="{{ sec }}" {{ 'checked' if cfg.get(sec) }}>
+      {{ params.effect_short(sec) }}
+    </label>
+    {% endfor %}
+  </div>
+  {% for sec in params.EFFECT_SECTIONS %}{{ nested_block(sec, cfg) }}{% endfor %}
+</section>
 
 <details class="card fold" {{ 'open' if not ready }}>
   <summary><b>Что подставлено</b> — {{ prefilled | length }} значений, вводить не нужно</summary>
@@ -380,4 +388,18 @@
   <a class="ghost-link" href="/initiative/{{ init.id }}/panel">Назад к панели</a>
 </div>
 </form>
+<script>
+// Решение «откуда приходит эффект» принимается один раз в строке выбора.
+// Четыре карточки подряд заставляли принимать его четырежды — и три раза впустую:
+// на обычной инициативе не нужен ни один из блоков.
+function syncSources() {
+  document.querySelectorAll('.srcpick').forEach(cb => {
+    const blk = document.querySelector(`.srcblock[data-src="${cb.dataset.src}"]`);
+    if (blk) blk.hidden = !cb.checked;
+  });
+}
+document.querySelectorAll('.srcpick').forEach(cb =>
+  cb.addEventListener('change', syncSources));
+syncSources();
+</script>
 {% endblock %}

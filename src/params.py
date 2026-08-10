@@ -750,6 +750,21 @@ NESTED_SECTIONS = {
                        calc.NATURAL_KEYS),
 }
 
+# Источники эффекта, которые задаются на шаге «Допущения». Бриф и пилот сюда не входят:
+# у них свои шаги. Порядок — по частоте применения, а не по алфавиту: связанный клиент
+# встречается на детских и семейных продуктах почти всегда, партнёр — редко.
+EFFECT_SECTIONS = ("linked_client", "companion", "natural_effect", "partner")
+
+
+def effect_short(section):
+    """Короткая подпись для выбора источника: полный заголовок — это уже объяснение."""
+    return {"linked_client": "Связанный клиент",
+            "companion": "Продукт-спутник",
+            "natural_effect": "Натуральный эффект",
+            "partner": "P&L партнёра"}.get(
+        section, NESTED_SECTIONS.get(section, ("", {}))[0].split(":")[0].strip())
+
+
 ALL = [p for _, _, ps in SECTIONS for p in ps]
 BY_KEY = {(p.section, p.key): p for p in ALL}
 CHANNEL_BY_KEY = {p.key: p for p in CHANNELS}
