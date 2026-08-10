@@ -58,6 +58,7 @@
     "baseline_rate": 0.52,
     "observed_rate": 0.61,
     "scale_haircut": 0.75,
+    "metrics_are": "level",
     "metrics": {"activation_rate": 0.61, "monthly_turnover": 34000}
   },
 

@@ -339,7 +339,23 @@ PILOT_KEYS = {"name": None, "geography": None, "rollout_geography": None,
               "sample_size": (0.0, 1e9), "control_size": (0.0, 1e9),
               "duration_months": (0.0, 600.0),
               "baseline_rate": _RATE, "observed_rate": _RATE,
-              "scale_haircut": (0.0, 2.0), "metrics": None}
+              "scale_haircut": (0.0, 2.0), "metrics": None, "metrics_are": None}
+
+# Метрики-УРОВНИ: абсолютные величины, а не доли. С ними у пилота с контрольной
+# группой есть развилка, которой нет у долей, и движок не имеет права проходить
+# её молча.
+#
+# «Средний оборот в пилоте 34 000» — это уровень: столько тратит клиент продукта,
+# и подставить это в модель правильно. «Оборот вырос на 6 000 против клиентов
+# с обычной картой» — это ПРИРОСТ ПРОТИВ КОНТРОЛЯ, и подставлять его как уровень
+# нельзя ни при каких условиях: получится клиент, который тратит 6 000 в месяц.
+#
+# Числа выглядят одинаково, обе фразы звучат как «пилот показал», и разницу
+# знает только тот, кто пилот проводил. Поэтому спрашиваем прямо.
+PILOT_LEVEL_METRICS = {"avg_balance", "monthly_turnover", "fee_income_m",
+                       "servicing_cost_m", "operating_income_annual",
+                       "value_per_client"}
+PILOT_METRICS_ARE = ("level", "uplift")
 # Какие параметры пилот имеет право переопределить и куда они ложатся.
 PILOT_TARGET = {**{k: "funnel" for k in FUNNEL_KEYS},
                 **{k: "unit_economics" for k in UE_KEYS}}
@@ -493,6 +509,19 @@ def validate_config(cfg):
                 errs.append("pilot.metrics: должен быть объектом {параметр: значение}.")
             else:
                 _check_keys(mt, {**FUNNEL_KEYS, **UE_KEYS}, "pilot.metrics", errs)
+        _ma = pil.get("metrics_are")
+        if _ma is not None and _ma not in PILOT_METRICS_ARE:
+            errs.append(f"pilot.metrics_are: допустимо «level» (уровень в тестовой группе) "
+                        f"или «uplift» (прирост против контроля), получено «{_ma}».")
+        _lvl = sorted(set(pil.get("metrics") or {}) & PILOT_LEVEL_METRICS)
+        if _lvl and pil.get("control_group") and _ma is None:
+            errs.append(
+                "pilot.metrics_are: у пилота есть контрольная группа и метрики-уровни "
+                f"({', '.join(_lvl)}) — непонятно, что в них записано. «Средний оборот "
+                "в пилоте 34 000» и «оборот вырос на 6 000 против контроля» выглядят "
+                "одинаково, а означают разное: первое подставляется в модель как есть, "
+                "второе как уровень даст клиента, который тратит 6 000 в месяц. "
+                "Укажите явно: metrics_are = «level» или «uplift».")
         for a, b in (("sample_size", "control_size"),):
             if pil.get("control_group") and not pil.get(b) and pil.get(a):
                 errs.append(f"pilot.{b}: заявлена контрольная группа, но её размер не задан — "
@@ -645,9 +674,22 @@ def apply_pilot(cfg):
     # осторожный коэффициент 0,75 превращает это в 45,75% — то есть чем аккуратнее
     # мы переносим хорошую новость, тем хуже становится база, которая была и без пилота.
     # Правильно: 55% + (61% − 55%) × 0,75 = 59,5%. Осторожность применяется к дельте.
+    metrics_are = p.get("metrics_are")
     for k, v in (p.get("metrics") or {}).items():
         sec = PILOT_TARGET.get(k)
         if not sec:
+            continue
+        # Прирост против контроля — не уровень. Пересчитать его в эффект умеет
+        # растранзачивание базы (turnover_before/after), а подстановка в юнит-экономику
+        # даст клиента с оборотом в размер прироста. Молча этого не делаем.
+        if metrics_are == "uplift" and k in PILOT_LEVEL_METRICS:
+            notes.append(
+                f"ПРИРОСТ НЕ ПОДСТАВЛЕН КАК УРОВЕНЬ: {sec}.{k} = {v:.6g} объявлен приростом "
+                "против контрольной группы, а этот параметр модели — абсолютный уровень. "
+                "Подстановка сделала бы клиента, у которого весь оборот равен приросту. "
+                "Поведенческий прирост считается блоком «Растранзачивание своей базы»: "
+                "задайте «до» и «после» там — он умножит разницу на число клиентов "
+                "раскатки и переведёт в деньги по ставкам продукта.")
             continue
         was = cfg.setdefault(sec, {}).get(k)
         has_base = isinstance(was, (int, float)) and not isinstance(was, bool)
@@ -656,6 +698,12 @@ def apply_pilot(cfg):
         applied.append({"param": f"{sec}.{k}", "pilot_value": v,
                         "applied_value": new, "previous": was if has_base else None,
                         "grade": grade})
+        if metrics_are == "level" and k in PILOT_LEVEL_METRICS and p.get("control_group"):
+            notes.append(
+                f"УРОВЕНЬ, А НЕ ПРИРОСТ: {sec}.{k} взят как абсолютная величина тестовой "
+                "группы — так и объявлено. Контрольная группа для этой метрики "
+                "не использовалась: она отвечает на вопрос «взяли бы и без нас», "
+                "а не «сколько тратит клиент продукта».")
         notes.append(
             f"ИЗ ПИЛОТА: {sec}.{k} = {new:.6g} — "
             + (f"было {was:.6g}, пилот даёт {v:.6g}, перенесли {haircut:.0%} прироста"

@@ -740,7 +740,7 @@ r = client.post(f"/initiative/{iid}/pilot", data={
     "pilot.control_group": "on",
     "pilot.sample_size": "40000", "pilot.control_size": "40000",
     "pilot.baseline_rate": "0,52", "pilot.observed_rate": "0,61",
-    "pilot.scale_haircut": "0,75",
+    "pilot.scale_haircut": "0,75", "pilot.metrics_are": "level",
     "metric.0.key": "activation_rate", "metric.0.value": "0,61",
     "metric.1.key": "monthly_turnover", "metric.1.value": "34000",
     "metric.2.key": "approval_rate", "metric.2.value": "",     # пустое не сохраняется
@@ -753,10 +753,49 @@ check("Метрики пилота легли в конфиг",
 check("Пустая метрика не сохранилась", "approval_rate" not in _cfg["pilot"]["metrics"])
 check("Русская запятая разобрана и в полях пилота", _cfg["pilot"]["baseline_rate"] == 0.52)
 
+_no_answer = json.loads(json.dumps(_cfg))
+_no_answer["pilot"].pop("metrics_are", None)
+try:
+    calc.validate_config(_no_answer)
+    _pilot_err = []
+except calc.ConfigError as e:
+    _pilot_err = str(e).splitlines()
+
+
+def _apply_as(kind):
+    c = json.loads(json.dumps(_cfg))
+    c["pilot"]["metrics_are"] = kind
+    return calc.apply_pilot(c)
+
+
+_probe_level, _probe_uplift = _apply_as("level"), _apply_as("uplift")
+_applied_level = {a["param"] for a in _probe_level["_pilot"]["applied"]}
+_applied_uplift = {a["param"] for a in _probe_uplift["_pilot"]["applied"]}
+
 _probe = calc.apply_pilot(json.loads(json.dumps(_cfg)))
 check("География Москва → РФ понижает грейд до B−", _probe["_pilot"]["grade"] == "B_minus")
 check("Мощность выборки считает движок: 9 п.п. на 40 000 доказуемы",
       _probe["_pilot"]["power"]["conclusive"] is True)
+# Развилка «уровень или прирост». Число одно и то же, фразы звучат одинаково,
+# а разница на этом кейсе — 15 млн ₽ NPV. Раньше движок выбирал молча.
+check("Пилот с контролем и метрикой в рублях требует ответа, что в ней записано",
+      any("metrics_are" in e for e in _pilot_err),
+      "; ".join(_pilot_err)[:80] if _pilot_err else "движок промолчал")
+check("Ответ «уровень» подставляет величину в модель",
+      "unit_economics.monthly_turnover" in _applied_level)
+check("Ответ «прирост» НЕ подставляет её как уровень",
+      "unit_economics.monthly_turnover" not in _applied_uplift,
+      "иначе вышел бы клиент, у которого весь оборот равен приросту")
+check("Отказ подставить объяснён и указывает, чем считать прирост",
+      any("ПРИРОСТ НЕ ПОДСТАВЛЕН" in n and "Растранзачивание" in n
+          for n in _probe_uplift.get("_notes", [])))
+check("Подстановка уровня оговаривает, что контроль для неё не использовался",
+      any("УРОВЕНЬ, А НЕ ПРИРОСТ" in n for n in _probe_level.get("_notes", [])))
+check("Доли развилка не касается: конверсия подставляется при любом ответе",
+      "funnel.activation_rate" in _applied_level and
+      "funnel.activation_rate" in _applied_uplift,
+      "у доли «уровень» и «прирост» не путаются — прирост там задан отдельными полями")
+
 check("Коэффициент переноса режет прирост, а не уровень",
       abs(_probe["funnel"]["activation_rate"] - (0.65 + (0.61 - 0.65) * 0.75)) < 1e-9,
       f'получилось {_probe["funnel"]["activation_rate"]}')

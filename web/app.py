@@ -578,6 +578,11 @@ def form_to_pilot(form, cfg):
         v = (form.get(f"pilot.{k}") or "").strip()
         if v:
             p[k] = v
+    # «не указано» — это отсутствие ответа, а не ответ: движок обязан спросить,
+    # а не подставить умолчание за человека
+    _ma = (form.get("pilot.metrics_are") or "").strip()
+    if _ma:
+        p["metrics_are"] = _ma
     for k in PILOT_FLAGS:
         p[k] = bool(form.get(f"pilot.{k}"))
     for k in ("sample_size", "control_size", "duration_months",
