@@ -122,27 +122,31 @@
     </thead>
     <tbody id="chbody">
       {% for ch in (cfg.channels or []) + [{}, {}] %}
+      {# Индекс строки запоминаем ДО вложенных циклов: внутри них loop.index0 указывает
+         на внутренний цикл, и поля уезжали в чужие каналы — ch.0.budget, ch.1.cpm,
+         ch.2.ctr. Данные по каналам при этом «слетали», а воронка схлопывалась. #}
+      {% set row_i = loop.index0 %}
       <tr>
-        <td><input name="ch.{{ loop.index0 }}.name" value="{{ ch.get('name', '') }}"
+        <td><input name="ch.{{ row_i }}.name" value="{{ ch.get('name', '') }}"
                    placeholder="название"></td>
         <td>
           {# без явного selected браузер выберет первый пункт: пустая строка молча
              становилась internal, а internal не смотрит на CPM и CTR — канал съедал
              бюджет и давал ноль заявок #}
-          <select name="ch.{{ loop.index0 }}.kind">
+          <select name="ch.{{ row_i }}.kind">
             {% for k in ('perform', 'internal', 'brand') %}
               <option value="{{ k }}" {{ 'selected' if (ch.get('kind') or 'perform') == k }}>{{ k }}</option>
             {% endfor %}
           </select>
         </td>
-        <td><input name="ch.{{ loop.index0 }}.frk_tier" class="tiny"
+        <td><input name="ch.{{ row_i }}.frk_tier" class="tiny"
                    value="{{ ch.get('frk_tier', 4) }}"></td>
         {# подсказки берутся из реестра каналов, а не пишутся здесь: типовой диапазон
            живёт рядом с диапазоном допустимых значений и не разъезжается с ним #}
         {% for key in ('budget', 'cpm', 'ctr', 'response_rate', 'cr_to_app',
                        'brand_uplift', 'reach_abs') %}
           {% set cp = params.CHANNEL_BY_KEY[key] %}
-          <td class="r"><input name="ch.{{ loop.index0 }}.{{ key }}"
+          <td class="r"><input name="ch.{{ row_i }}.{{ key }}"
                  value="{{ ch.get(key, '') }}"
                  placeholder="{{ cp.hint }}" title="{{ cp.hint }}">
             {% if cp.hint %}<small class="hint-in">{{ cp.hint }}</small>{% endif %}

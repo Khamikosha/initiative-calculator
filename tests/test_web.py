@@ -376,6 +376,51 @@ check("Снятая галочка убирает блок целиком, а н
           _db.get_initiative(_db.connect(), _lid)["config_json"]))
 
 
+# ------------------------------- Имена полей формы соответствуют строкам таблицы
+# Регрессия, прожившая до живого теста: во вложенном цикле шаблона `loop.index0`
+# указывает на ВНУТРЕННИЙ цикл, и поля канала уезжали в чужие строки —
+# ch.0.budget, ch.1.cpm, ch.2.ctr. Данные «слетали», воронка схлопывалась.
+#
+# Прежние тесты этого не видели: они слали форму СЛОВАРЁМ, минуя разметку.
+# Проверять надо то, что реально отрендерено.
+import re as _re
+r = client.post("/initiative/new", data={
+    "name": "Разметка", "type": "frk3", "product": "card"}, follow_redirects=False)
+_fid = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_fid}/segments",
+            data={"segments": ["youth"], "seg.youth.baseline_organic_apps_m": "20000"},
+            follow_redirects=False)
+_html = client.get(f"/initiative/{_fid}/assumptions").text
+_rows = {}
+for _n in _re.findall(r'name="ch\.(\d+)\.(\w+)"', _html):
+    _rows.setdefault(_n[0], set()).add(_n[1])
+check("Каждая строка канала несёт полный набор своих полей",
+      all(len(v) >= 9 for v in _rows.values()),
+      f'по строкам: { {k: len(v) for k, v in sorted(_rows.items())} }')
+check("Поля канала не разъезжаются по чужим строкам",
+      all("cpm" in v and "ctr" in v and "reach_abs" in v for v in _rows.values()),
+      "иначе ch.0.budget соседствует с ch.1.cpm и данные теряются")
+
+# и сквозная проверка: заполненные каналы переживают сохранение
+client.post(f"/initiative/{_fid}/assumptions", data={
+    "costs.campaign_months": "3", "costs.production": "12000000",
+    "ch.0.name": "Перформанс", "ch.0.kind": "perform", "ch.0.frk_tier": "4",
+    "ch.0.budget": "25000000", "ch.0.cpm": "380", "ch.0.ctr": "0.007",
+    "ch.0.cr_to_app": "0.035",
+    "ch.1.name": "Посевы", "ch.1.kind": "perform", "ch.1.frk_tier": "3",
+    "ch.1.budget": "15000000", "ch.1.cpm": "260", "ch.1.ctr": "0.005",
+    "ch.1.cr_to_app": "0.025", "action": "save"}, follow_redirects=False)
+_fch = json.loads(_db.get_initiative(_db.connect(), _fid)["config_json"])["channels"]
+check("Оценки по каналам не слетают при сохранении",
+      len(_fch) == 2 and _fch[0]["cpm"] == 380 and _fch[0]["ctr"] == 0.007
+      and _fch[1]["cpm"] == 260 and _fch[1]["cr_to_app"] == 0.025,
+      json.dumps(_fch, ensure_ascii=False))
+_fpage = client.get(f"/initiative/{_fid}/assumptions").text
+check("Сохранённые значения возвращаются в форму",
+      'value="380.0"' in _fpage or 'value="380"' in _fpage,
+      "иначе человек видит пустое поле и вводит заново")
+
+
 # ---------------------------------------------------------------- 2. Путь целиком
 client.post("/author", data={"author": "Тестировщик", "back": "/"}, follow_redirects=False)
 
