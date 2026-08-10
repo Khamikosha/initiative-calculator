@@ -277,3 +277,4 @@ details.nested > summary { font-size: 15px; }
 .parts .sum-off { color: var(--bad); }
 .params.rows td { padding: 3px 4px; }
 .params.rows input { width: 100%; }
+.params.rows.season th, .params.rows.season td { min-width: 56px; }

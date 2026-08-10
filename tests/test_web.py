@@ -519,6 +519,106 @@ check("Нулевая маржа растранзачивания при гот�
       "заполненный блок не должен давать ноль без причины")
 
 
+# ------------------------------- Разложение оборота и сезонность (BACKLOG 20)
+# Последние два вложенных ключа. Одна усреднённая ставка interchange прячет, что
+# POS, e-POS и снятие оплачиваются по-разному; равномерный приток прячет форму плана.
+check("Разделы с разложением оборота берутся из реестра",
+      set(params.SPLIT_SECTIONS) == {"unit_economics", "partner"})
+check("Поля строки разложения совпадают с ключами движка",
+      {f.key for f in params.split_fields("unit_economics")} ==
+      set(calc.TXN_KEYS) | {"name"})
+
+r = client.post("/initiative/new", data={
+    "name": "Оборот и сезон", "type": "product_launch", "product": "card"},
+    follow_redirects=False)
+_sid = int(r.headers["location"].split("/")[2])
+client.post(f"/initiative/{_sid}/segments",
+            data={"segments": ["youth"], "seg.youth.baseline_organic_apps_m": "700"},
+            follow_redirects=False)
+_spage = client.get(f"/initiative/{_sid}/assumptions").text
+for _sec in params.SPLIT_SECTIONS:
+    _smissing = [f.key for f in params.split_fields(_sec)
+                 if f'name="{_sec}.txn.0.{f.key}"' not in _spage]
+    check(f"Таблица разложения раздела «{_sec}» отрисована со всеми полями",
+          not _smissing, f"нет в форме: {_smissing}" if _smissing else "")
+check("Сезонность отрисована двенадцатью полями",
+      all(f'name="acquisition.season.{i}"' in _spage
+          for i in range(params.SEASON_MONTHS)))
+check("Месяцы сезонности не подписаны календарными названиями",
+      not any(m in _spage for m in ("январ", "Январ", "феврал", "Феврал")),
+      "движок берёт seas[m % 12] от старта кампании — календарной привязки нет, "
+      "и подпись «январь» обещала бы то, чего в модели не существует")
+
+_perf = {"costs.campaign_months": "12", "ch.0.name": "Перф", "ch.0.kind": "perform",
+         "ch.0.frk_tier": "4", "ch.0.budget": "50000000", "ch.0.cpm": "250",
+         "ch.0.ctr": "0.008", "ch.0.cr_to_app": "0.06", "action": "save"}
+_txn = [("POS", "0.6", "0.0006"), ("e-POS", "0.3", "0.002"), ("снятие", "0.1", "0.001")]
+_sd = dict(_perf)
+for _i, (_n, _sh, _fee) in enumerate(_txn):
+    _sd[f"unit_economics.txn.{_i}.name"] = _n
+    _sd[f"unit_economics.txn.{_i}.share"] = _sh
+    _sd[f"unit_economics.txn.{_i}.fee"] = _fee
+_season = [1.3, 2.0, 1.7, 1.0, 0.7, 1.0, 0.95, 0.95, 0.9, 0.85, 0.95, 1.0]
+for _i, _v in enumerate(_season):
+    _sd[f"acquisition.season.{_i}"] = str(_v).replace(".", ",")
+client.post(f"/initiative/{_sid}/assumptions", data=_sd, follow_redirects=False)
+_scfg = json.loads(_db.get_initiative(_db.connect(), _sid)["config_json"])
+check("Разложение доезжает до конфига словарём по видам операций",
+      _scfg["unit_economics"]["turnover_split"] ==
+      {"POS": {"share": 0.6, "fee": 0.0006}, "e-POS": {"share": 0.3, "fee": 0.002},
+       "снятие": {"share": 0.1, "fee": 0.001}})
+check("Сезонный профиль доезжает списком из двенадцати",
+      _scfg["acquisition"]["seasonality"] == _season)
+
+# Ставки видов операций ниже общего interchange — значит и комиссия должна упасть.
+_sr = client.post(f"/initiative/{_sid}/calculate", follow_redirects=False)
+_swith = json.loads(_db.get_calculation(
+    _db.connect(), int(_sr.headers["location"].split("/")[-1]))["result_json"])
+for _i in range(len(_txn)):
+    for _k in ("name", "share", "fee"):
+        _sd.pop(f"unit_economics.txn.{_i}.{_k}")
+client.post(f"/initiative/{_sid}/assumptions", data=_sd, follow_redirects=False)
+check("Пустая таблица убирает разложение, а не оставляет пустой словарь",
+      "turnover_split" not in json.loads(
+          _db.get_initiative(_db.connect(), _sid)["config_json"])["unit_economics"],
+      "иначе весь оборот молча пошёл бы по ставке ноль")
+_sr2 = client.post(f"/initiative/{_sid}/calculate", follow_redirects=False)
+_sflat = json.loads(_db.get_calculation(
+    _db.connect(), int(_sr2.headers["location"].split("/")[-1]))["result_json"])
+check("Разложение оборота меняет NPV — усреднённая ставка не то же самое",
+      _swith["pl"]["npv"] != _sflat["pl"]["npv"],
+      f'{_swith["pl"]["npv"]:,} против {_sflat["pl"]["npv"]:,} ₽')
+
+# Дубликат названия: словарь молча затёр бы первую строку вместе с её долей
+_dup = dict(_perf)
+for _i, _n in enumerate(("POS", "POS")):
+    _dup[f"unit_economics.txn.{_i}.name"] = _n
+    _dup[f"unit_economics.txn.{_i}.share"] = "0.5"
+    _dup[f"unit_economics.txn.{_i}.fee"] = "0.001"
+client.post(f"/initiative/{_sid}/assumptions", data=_dup, follow_redirects=False)
+check("Повторённое название вида операций не съедает предыдущую строку",
+      len(json.loads(_db.get_initiative(_db.connect(), _sid)["config_json"])
+          ["unit_economics"]["turnover_split"]) == 2,
+      "иначе половина оборота исчезла бы бесследно и доли не сошлись бы к 1,0")
+
+# Профиль пишется целиком: половина двенадцати месяцев — не «остальные по единице»
+_half = dict(_perf)
+for _i in range(6):
+    _half[f"acquisition.season.{_i}"] = "1"
+client.post(f"/initiative/{_sid}/assumptions", data=_half, follow_redirects=False)
+check("Недостающие месяцы профиля не дорисовываются единицами",
+      len(json.loads(_db.get_initiative(_db.connect(), _sid)["config_json"])
+          ["acquisition"]["seasonality"]) == 6,
+      "дорисовка превратила бы ошибку ввода в правдоподобный профиль")
+_hr = client.post(f"/initiative/{_sid}/calculate", follow_redirects=False)
+_herr = unquote(_hr.headers.get("location", ""))
+check("Половина профиля останавливает расчёт с внятной причиной",
+      "seasonality" in _herr and "12" in _herr and
+      _herr.startswith(f"/initiative/{_sid}/assumptions"),
+      "заданная наполовину форма плана тише и опаснее её отсутствия — "
+      "и ошибка ведёт на тот шаг, где её правят")
+
+
 # ------------------------------- Имена полей формы соответствуют строкам таблицы
 # Регрессия, прожившая до живого теста: во вложенном цикле шаблона `loop.index0`
 # указывает на ВНУТРЕННИЙ цикл, и поля канала уезжали в чужие строки —

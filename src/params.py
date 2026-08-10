@@ -906,7 +906,8 @@ NESTED_FIELD_META = {
                  "это до переговоров, а не после."),
         "turnover_split": dict(
             label="Разложение оборота партнёра", fmt="text", config_only=True,
-            note="Доли и ставки по типам операций. Задаётся конфигом."),
+            note="Доли и ставки по типам операций — таблицей ниже. У партнёра своя "
+                 "структура оборота: она может отличаться от банковской."),
     },
 
     "natural_effect": {
@@ -975,9 +976,69 @@ def nested_fields(section):
 # Разделы, у которых база раскладывается на части. Список ведётся здесь, а не
 # перечислением имён в шаблоне: следующий такой раздел не должен требовать правки
 # вёрстки — как это уже было со структурными полями вложенных блоков.
-PARTS_SECTIONS = (tuple(sec for sec, key in NESTED_KEYS if key == "parts")
-                  + tuple(sec for sec, (_, keys) in NESTED_SECTIONS.items()
-                          if "parts" in keys))
+def _sections_with(key):
+    """Разделы, где движок читает вложенный ключ этого имени.
+
+    Список ведётся здесь, а не перечислением имён в шаблоне: следующий такой
+    раздел не должен требовать правки вёрстки — на этом уже обжигались,
+    когда шаблон знал строку 'sources' поимённо.
+    """
+    return (tuple(sec for sec, k in NESTED_KEYS if k == key)
+            + tuple(sec for sec, (_, keys) in NESTED_SECTIONS.items() if key in keys))
+
+
+PARTS_SECTIONS = _sections_with("parts")
+SPLIT_SECTIONS = _sections_with("turnover_split")
+
+# --------------------------------------------------- РАЗЛОЖЕНИЕ ОБОРОТА ПО ОПЕРАЦИЯМ
+# Одна усреднённая ставка interchange прячет, что POS, e-POS и снятие оплачиваются
+# по-разному, а их доли двигаются независимо: рост доли онлайна меняет доход банка
+# при неизменном обороте. На кейсе Узбекистана ставки различались вчетверо.
+SPLIT_FIELD_META = {
+    "name": dict(label="Вид операции", fmt="text",
+                 note="POS, e-POS, снятие, переводы. Название — ключ строки: "
+                      "безымянная строка в расчёт не идёт."),
+    "share": dict(label="Доля оборота", unit="%", fmt="pct", key_assumption=True,
+                  note="Доли всех видов в сумме дают 1,0. Недостающая доля молча "
+                       "не приносит комиссии, лишняя приносит её дважды."),
+    "fee": dict(label="Ставка комиссии", unit="%", fmt="pct2", key_assumption=True,
+                typical=(0.0003, 0.002),
+                note="Своя у каждого вида. Если разложение не задано, весь оборот "
+                     "считается по общей ставке interchange."),
+}
+
+# Сезонность привязана к СТАРТУ кампании, а не к календарю: движок берёт seas[m % 12],
+# где m — месяц от начала горизонта. Подписывать месяцы январём-декабрём значило бы
+# обещать календарную привязку, которой в модели нет.
+SEASON_MONTHS = 12
+SEASON_NOTE = ("Множители притока по месяцам от старта кампании, среднее около 1. "
+               "Профиль повторяется дальше по горизонту. Считается только форма: "
+               "уровень задаётся целью первого года или медиапланом, поэтому "
+               "множители нормируются на свою сумму.")
+
+
+def split_fields(section):
+    """Поля одной строки разложения оборота."""
+    return [Param(key=key, section=section,
+                  label=(m := dict(SPLIT_FIELD_META[key])).pop("label"), **m)
+            for key in ("name",) + tuple(calc.TXN_KEYS)]
+
+
+def split_sum(cfg, section):
+    """Сумма долей — показать до расчёта, а не ошибкой после."""
+    spl = ((cfg.get(section) or {}).get("turnover_split")) or {}
+    return sum(x for x in (v.get("share") for v in spl.values()
+                           if isinstance(v, dict))
+               if isinstance(x, (int, float)) and not isinstance(x, bool))
+
+
+def seasonality_values(cfg):
+    """12 множителей или пусто. Пустое поле и единица — разные вещи: при пустом
+    профиле движок раскладывает приток равномерно, а не по профилю из единиц."""
+    seas = (cfg.get("acquisition") or {}).get("seasonality")
+    if not isinstance(seas, list) or len(seas) != SEASON_MONTHS:
+        return [""] * SEASON_MONTHS
+    return list(seas)
 
 PART_FIELD_META = {
     "name": dict(label="Часть базы", fmt="text",

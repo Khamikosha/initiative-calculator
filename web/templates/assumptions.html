@@ -94,6 +94,67 @@
   </div>
 {% endmacro %}
 
+{# Разложение оборота по видам операций. Ключ строки — название, поэтому строка
+   без названия выбрасывается при разборе, как и в таблице частей базы. #}
+{% macro split_table(section, cfg) %}
+  {% set fields = params.split_fields(section) %}
+  {% set spl = ((cfg.get(section) or {}).get('turnover_split')) or {} %}
+  {% set names = spl.keys() | list %}
+  {% set total = params.split_sum(cfg, section) %}
+  <div class="parts">
+    <p class="muted">Разложение оборота по видам операций. Ставки у POS, e-POS и снятия
+    разные, и одна усреднённая их прячет: доли должны давать <b>1,0</b>{% if names %} —
+    сейчас <b class="{{ 'sum-off' if (total - 1.0) | abs > 0.005 else 'sum-ok' }}">{{ '%.3f' | format(total) | replace('.', ',') }}</b>{% endif %}.
+    Пустая таблица — весь оборот считается по общей ставке interchange.</p>
+    <table class="params rows">
+      <thead><tr>{% for f in fields %}<th{{ ' class=r' | safe if f.fmt != 'text' }}>{{ f.label }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for i in range(names | length + 3) %}
+        {% set nm = names[i] if i < (names | length) else '' %}
+        {% set row = spl.get(nm) or {} %}
+        <tr>
+        {% for f in fields %}
+          <td class="{{ 'r' if f.fmt != 'text' }}">
+            <input name="{{ section }}.txn.{{ i }}.{{ f.key }}"
+                   class="{{ 'key' if f.key_assumption }}"
+                   inputmode="{{ 'text' if f.fmt == 'text' else 'decimal' }}"
+                   placeholder="{{ f.hint }}" title="{{ f.note }}"
+                   value="{{ nm if f.key == 'name' else row.get(f.key, '') }}">
+          </td>
+        {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <small class="muted">{% for f in fields %}<b>{{ f.label }}</b> — {{ f.note }}{% if not loop.last %}<br>{% endif %}{% endfor %}</small>
+  </div>
+{% endmacro %}
+
+{# Сезонный профиль: 12 множителей ОТ СТАРТА кампании. Календарных названий месяцев
+   здесь быть не может — движок берёт seas[m % 12] от начала горизонта, календарной
+   привязки в модели нет, и подпись «январь» обещала бы то, чего нет. #}
+{% macro seasonality_row(cfg) %}
+  {% set vals = params.seasonality_values(cfg) %}
+  <div class="parts">
+    <p class="muted">{{ params.SEASON_NOTE }}
+    Пустой профиль — приток раскладывается ровно по месяцам кампании.</p>
+    <div class="scroll">
+    <table class="params rows season">
+      <thead><tr>{% for i in range(params.SEASON_MONTHS) %}<th class="r">{{ i + 1 }}-й</th>{% endfor %}</tr></thead>
+      <tbody><tr>
+      {% for i in range(params.SEASON_MONTHS) %}
+        <td class="r"><input name="acquisition.season.{{ i }}" inputmode="decimal"
+                             placeholder="1" value="{{ vals[i] }}"></td>
+      {% endfor %}
+      </tr></tbody>
+    </table>
+    </div>
+    <small class="muted">Заполнять либо все двенадцать, либо ни одного: движок
+    отвергает профиль другой длины — форма плана, заданная наполовину, тише
+    и опаснее, чем её отсутствие.</small>
+  </div>
+{% endmacro %}
+
 {% macro nested_block(section, cfg) %}
   {% set on = cfg.get(section) %}
   <details class="card fold nested" {{ 'open' if on }}>
@@ -126,6 +187,7 @@
       </tbody>
     </table>
     {% if section in params.PARTS_SECTIONS %}{{ parts_table(section, cfg) }}{% endif %}
+    {% if section in params.SPLIT_SECTIONS %}{{ split_table(section, cfg) }}{% endif %}
   </details>
 {% endmacro %}
 
@@ -291,7 +353,9 @@
   <section class="card">
     <h3>{{ title }}</h3>
     {% if split[0] %}{{ ptable(split[0], sec, cfg, seg_ids, chosen) }}{% endif %}
-    {% if sec == 'base_activation' %}{{ parts_table(sec, cfg) }}{% endif %}
+    {% if sec in params.PARTS_SECTIONS %}{{ parts_table(sec, cfg) }}{% endif %}
+    {% if sec in params.SPLIT_SECTIONS %}{{ split_table(sec, cfg) }}{% endif %}
+    {% if sec == 'acquisition' %}{{ seasonality_row(cfg) }}{% endif %}
     {% if split[1] %}
       <details class="rest">
         <summary>Прочие — при типе «{{ tmeta.label }}» на результат не влияют

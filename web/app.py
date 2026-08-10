@@ -452,6 +452,55 @@ def form_to_parts(form, cfg, section):
     return cfg
 
 
+def form_to_split(form, cfg, section):
+    """Строки разложения оборота → `cfg[section]["turnover_split"]`.
+
+    Здесь не список, а словарь {название: {share, fee}} — движок хранит виды
+    операций по имени. Дубликат имени поэтому молча затирал бы предыдущую строку:
+    вторую и дальше отмечаем суффиксом, чтобы человек увидел свою ошибку в форме,
+    а не потерял долю оборота без следа.
+    """
+    blk = cfg.get(section)
+    if not isinstance(blk, dict):
+        return cfg
+    keys = [f.key for f in params.split_fields(section) if f.key != "name"]
+    split, i = {}, 0
+    while any(k.startswith(f"{section}.txn.{i}.") for k in form.keys()):
+        name = (form.get(f"{section}.txn.{i}.name") or "").strip()
+        if name:
+            while name in split:
+                name += " (2)"
+            split[name] = {k: _num(v) for k in keys
+                           if (v := (form.get(f"{section}.txn.{i}.{k}") or "").strip())}
+        i += 1
+    if split:
+        blk["turnover_split"] = split
+    else:
+        blk.pop("turnover_split", None)
+    return cfg
+
+
+def form_to_seasonality(form, cfg):
+    """Двенадцать множителей → `acquisition.seasonality`.
+
+    Профиль пишется только целиком. Заполненные наполовину двенадцать месяцев —
+    это не «остальные равны единице», а форма плана, про которую человек думает,
+    что задал её: движок такой профиль отвергает, и правильно делает. Поэтому
+    частично заполненный набор отправляем ему как есть, не дорисовывая единицы.
+    """
+    field = "acquisition.season.0"
+    if field not in form:
+        return cfg                       # этой формы здесь нет — значение не трогаем
+    raw = [(form.get(f"acquisition.season.{i}") or "").strip()
+           for i in range(params.SEASON_MONTHS)]
+    acq = cfg.setdefault("acquisition", {})
+    if not any(raw):
+        acq.pop("seasonality", None)
+    else:
+        acq["seasonality"] = [_num(v) for v in raw if v]
+    return cfg
+
+
 def form_to_brief(form, cfg, description):
     """Строки таблицы утверждений → раздел `brief` конфига.
 
@@ -745,6 +794,9 @@ async def assumptions_save(request: Request, iid: int):
     # а класть части в несуществующий раздел значит воскресить снятый блок.
     for section in params.PARTS_SECTIONS:
         cfg = form_to_parts(f, cfg, section)
+    for section in params.SPLIT_SECTIONS:
+        cfg = form_to_split(f, cfg, section)
+    cfg = form_to_seasonality(f, cfg)
     db.update_initiative(con, iid, config=cfg, status="assumptions")
     if f.get("action") == "save":
         return RedirectResponse(f"/initiative/{iid}/assumptions", status_code=303)
