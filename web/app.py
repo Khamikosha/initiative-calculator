@@ -586,20 +586,27 @@ def form_to_pilot(form, cfg):
     for k in PILOT_FLAGS:
         p[k] = bool(form.get(f"pilot.{k}"))
     for k in ("sample_size", "control_size", "duration_months",
-              "baseline_rate", "observed_rate", "scale_haircut", "metric_cv"):
+              "baseline_rate", "observed_rate", "scale_haircut", "metric_cv",
+              "tail_months"):
         raw = form.get(f"pilot.{k}")
         if raw not in (None, ""):
             p[k] = _num(raw)
     # метрики: строки «параметр → значение», пустые пропускаем
-    metrics, i = {}, 0
+    metrics, tail, i = {}, {}, 0
     while any(k.startswith(f"metric.{i}.") for k in form.keys()):
         key = (form.get(f"metric.{i}.key") or "").strip()
         raw = form.get(f"metric.{i}.value")
         if key and raw not in (None, ""):
             metrics[key] = _num(raw)
+            # хвост без средней бессмыслен: сравнивать не с чем
+            tail_raw = form.get(f"metric.{i}.tail")
+            if tail_raw not in (None, ""):
+                tail[key] = _num(tail_raw)
         i += 1
     if metrics:
         p["metrics"] = metrics
+    if tail:
+        p["metrics_tail"] = tail
     cfg["pilot"] = p
     return cfg
 

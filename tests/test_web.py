@@ -843,10 +843,72 @@ check("Восемь месяцев из двенадцати названы не
 check("Замер короче горизонта — сказано, что дальше держится по допущению",
       any("ЗАМЕР" in n and "ГОРИЗОНТ" in n for n in _n_nosd))
 
+# Затухание из двух чисел. Помесячной аналитики нет, и не нужно: хвост окна
+# против средней за окно однозначно задаёт срок — при той модели затухания,
+# которую движок реально применяет.
+check("Формула обращает кривую затухания самого движка",
+      abs(calc.decay_from_tail(8, 2, 0.333333) - 8.0) < 0.01,
+      "затухание ровно за 8 мес даёт отношение 1/3 — и обратно")
+check("Хвост не ниже средней — срок не выводится, это не ошибка",
+      calc.decay_from_tail(8, 2, 1.0) is None and calc.decay_from_tail(8, 2, 1.2) is None)
+check("Чем ближе хвост к средней, тем дольше живёт эффект",
+      calc.decay_from_tail(8, 2, 0.9) > calc.decay_from_tail(8, 2, 0.6))
+
+_tail = json.loads(json.dumps(_beh))
+_tail["pilot"].update({"tail_months": 2, "metrics_tail": {"monthly_turnover": 1440}})
+_pt = calc.apply_pilot(calc.validate_config(json.loads(json.dumps(_tail))))
+check("Срок затухания выведен из замера и назван",
+      _pt["_pilot"]["decay_from_tail"]["monthly_turnover"] == 18.5 and
+      any("ЗАТУХАНИЕ ИЗ ЗАМЕРА" in n for n in _pt["_notes"]),
+      "хвост 1 440 против средней 1 800 → около 19 мес")
+check("Средняя за окно не выдаётся за пик",
+      any("СРЕДНЯЯ ЗА ОКНО — НЕ ПИК" in n for n in _pt["_notes"]))
+
+_flat = json.loads(json.dumps(_tail))
+_flat["pilot"]["metrics_tail"] = {"monthly_turnover": 1800}
+check("Ровный хвост читается как полка, а не как затухание",
+      any("ЭФФЕКТ НЕ ЗАТУХАЕТ" in n for n in _notes_of(_flat)),
+      "и сказано, что перенос средней тогда скорее занижает")
+
+_bad = json.loads(json.dumps(_tail))
+_bad["pilot"]["metrics_tail"] = {"avg_balance": 100}
+try:
+    calc.validate_config(_bad); _bad_err = []
+except calc.ConfigError as e:
+    _bad_err = str(e).splitlines()
+check("Хвост без своей средней отвергается: сравнивать не с чем",
+      any("metrics_tail" in e for e in _bad_err))
+
+# Срок жизни эффекта — самое большое допущение расчёта, и оно должно быть видно
+# среди драйверов, а не спрятано. Движение на ±25% для него бессмысленно:
+# вопрос «держится только окно замера или не гаснет вовсе».
+_tor = json.loads(json.dumps(_beh))
+_tor["base_activation"] = {
+    "name": "Против обычной карты", "eligible_clients": 500000,
+    "reach_share": 1.0, "technically_reachable": 1.0, "uplift_rate": 1.0,
+    "attribution_share": 1.0, "turnover_before": 0, "turnover_after": 1800,
+    "balance_before": 0, "balance_after": 4000, "decay_months": 18}
+_tres = calc.analyze(calc.resolve_segments(calc.normalize(
+    calc.apply_pilot(calc.validate_config(_tor)))))
+_drivers = [t["driver"] for t in _tres["tornado"]]
+check("Срок жизни эффекта есть среди драйверов торнадо",
+      any("Срок жизни эффекта" in d for d in _drivers))
+check("И он крупнее прочих драйверов, а не спрятан в хвосте списка",
+      "Срок жизни эффекта" in _drivers[0],
+      f'размах {_tres["tornado"][0]["swing"]:,.0f} ₽ против '
+      f'{_tres["tornado"][1]["swing"]:,.0f} ₽ у следующего')
+check("Границы взяты от окна замера до «не гаснет», а не ±25%",
+      calc._decay_bounds(_tor) == [8.0, 0.0],
+      "дальше окна замера доказательств нет — это и есть нижняя граница")
+
 # поля дизайна должны быть в разметке формы, а не только в разборе (BACKLOG 40)
 _ppage = client.get(f"/initiative/{iid}/pilot").text
-for _f in ("randomized", "matched_at_baseline", "metric_cv", "metrics_are"):
+for _f in ("randomized", "matched_at_baseline", "metric_cv", "metrics_are",
+           "tail_months"):
     check(f"Поле пилота «{_f}» есть в форме", f'name="pilot.{_f}"' in _ppage)
+check("Колонка хвоста есть и в отрисованных строках, и в шаблоне новой строки",
+      _ppage.count('name="metric.0.tail"') >= 1 and 'metric.0.tail' in _ppage,
+      "иначе хвост можно ввести только в уже существующей строке")
 
 check("Коэффициент переноса режет прирост, а не уровень",
       abs(_probe["funnel"]["activation_rate"] - (0.65 + (0.61 - 0.65) * 0.75)) < 1e-9,

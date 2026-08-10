@@ -341,7 +341,8 @@ PILOT_KEYS = {"name": None, "geography": None, "rollout_geography": None,
               "baseline_rate": _RATE, "observed_rate": _RATE,
               "scale_haircut": (0.0, 2.0), "metrics": None, "metrics_are": None,
               "randomized": None, "matched_at_baseline": None,
-              "metric_cv": (0.0, 20.0)}
+              "metric_cv": (0.0, 20.0),
+              "tail_months": (0.0, 600.0), "metrics_tail": None}
 
 # Метрики-УРОВНИ: абсолютные величины, а не доли. С ними у пилота с контрольной
 # группой есть развилка, которой нет у долей, и движок не имеет права проходить
@@ -515,6 +516,23 @@ def validate_config(cfg):
         if _ma is not None and _ma not in PILOT_METRICS_ARE:
             errs.append(f"pilot.metrics_are: допустимо «level» (уровень в тестовой группе) "
                         f"или «uplift» (прирост против контроля), получено «{_ma}».")
+        _tail = pil.get("metrics_tail")
+        if _tail is not None:
+            if not isinstance(_tail, dict):
+                errs.append("pilot.metrics_tail: должен быть объектом {параметр: значение "
+                            "за последние месяцы окна}.")
+            else:
+                _unknown = sorted(set(_tail) - set(pil.get("metrics") or {}))
+                if _unknown:
+                    errs.append(f"pilot.metrics_tail: {', '.join(_unknown)} — нет среди "
+                                "измеренных метрик. Хвост сравнивается со средней "
+                                "за окно, поэтому у него должна быть пара.")
+                _tm, _dm = g(pil, "tail_months"), g(pil, "duration_months")
+                if _tail and not (0 < _tm < _dm):
+                    errs.append(
+                        f"pilot.tail_months: {_tm:g} при длительности замера {_dm:g} — "
+                        "хвост это последние НЕСКОЛЬКО месяцев окна, он должен быть "
+                        "больше нуля и меньше самого окна.")
         _lvl = sorted(set(pil.get("metrics") or {}) & PILOT_LEVEL_METRICS)
         if _lvl and pil.get("control_group") and _ma is None:
             errs.append(
@@ -623,6 +641,31 @@ def validate_config(cfg):
     if errs:
         raise ConfigError("Конфиг не прошёл проверку:\n  - " + "\n  - ".join(errs))
     return cfg
+
+
+def decay_from_tail(window_months, tail_months, ratio):
+    """Срок затухания из ДВУХ чисел: средней за окно замера и средней за его хвост.
+
+    Помесячной аналитики обычно нет, а два среза за разные периоды достаются тем же
+    запросом, что и одна средняя. Этого достаточно: если хвост равен средней, эффект
+    вышел на полку; если ниже — видно и факт затухания, и его скорость.
+
+    Выведено ТОЧНО для той модели, которую применяет `decay_curve`: линейное падение
+    до нуля за D месяцев, вес когорты в месяц k равен 1 − k/D. Средняя за первые W
+    месяцев тогда 1 − (W−1)/2D, средняя за последние T месяцев окна 1 − (2W−T−1)/2D,
+    и их отношение однозначно задаёт D. Подгонять другую форму под чужую кривую
+    нельзя: получится срок, при котором движок посчитает не то, что мы оценили.
+
+    Возвращает None, когда затухания не видно (хвост не ниже средней) — это не ошибка,
+    а результат: эффект держится, и срок из таких данных не выводится.
+    """
+    W, T = window_months, tail_months
+    if W <= 1 or not (0 < T < W) or ratio is None or ratio <= 0 or ratio >= 1:
+        return None
+    a = (W - 1) / 2.0                 # средний возраст наблюдения по всему окну
+    b = (2 * W - T - 1) / 2.0         # то же по хвосту
+    d = (b - ratio * a) / (1.0 - ratio)
+    return d if d > 0 else None
 
 
 def mde_mean(sd, n_per_group):
@@ -806,6 +849,43 @@ def apply_pilot(cfg):
                     f"ПРИРОСТ ДОКАЗАТЕЛЕН: {k} — {nf(v)} против минимально различимого "
                     f"{nf(d_min)} при {nf(n_c)} на группу.")
 
+    # --- затухание из хвоста окна ---------------------------------------------
+    # Два числа вместо восьми: помесячной аналитики обычно нет, а два среза за разные
+    # периоды достаются тем же запросом, что и одна средняя.
+    tail_vals = p.get("metrics_tail") or {}
+    decay_est = {}
+    if tail_vals:
+        W, T = g(p, "duration_months"), g(p, "tail_months")
+        for k, tail_v in sorted(tail_vals.items()):
+            avg_v = g(p.get("metrics") or {}, k)
+            if not avg_v:
+                continue
+            r = tail_v / avg_v
+            if r >= 1.0:
+                notes.append(
+                    f"ЭФФЕКТ НЕ ЗАТУХАЕТ: {k} — за последние {T:g} мес окна {nf(tail_v)} "
+                    f"против средней за {W:g} мес {nf(avg_v)}. Эффект вышел на полку "
+                    "или ещё растёт, и перенос средней на горизонт скорее ЗАНИЖАЕТ. "
+                    "Затухание можно не задавать — но это теперь замер, а не догадка.")
+                continue
+            d = decay_from_tail(W, T, r)
+            if d is None:
+                continue
+            decay_est[k] = round(d, 1)
+            notes.append(
+                f"ЗАТУХАНИЕ ИЗ ЗАМЕРА: {k} — хвост {nf(tail_v)} против средней "
+                f"{nf(avg_v)} даёт {r:.0%}, то есть эффект гаснет примерно за "
+                f"{d:.0f} мес от выдачи. Ставьте decay_months = {d:.0f} там, где "
+                "считается эффект: это выведено из вашего же замера, а не взято "
+                "с потолка.")
+        if decay_est:
+            notes.append(
+                "СРЕДНЯЯ ЗА ОКНО — НЕ ПИК: раз эффект затухает, средняя за весь замер "
+                "ниже первого месяца и выше последнего. Движок применяет затухание "
+                "к тому уровню, который вы задали как «после», поэтому подставленная "
+                "средняя занижает начало и завышает хвост. Точнее — брать уровень "
+                "первых месяцев, если он есть.")
+
     # --- окно наблюдения против горизонта расчёта ------------------------------
     dur = g(p, "duration_months")
     hor = g(cfg.get("meta") or {}, "horizon_months")
@@ -830,7 +910,8 @@ def apply_pilot(cfg):
                      "от аудитории раскатки, разница в конверсии объясняется отбором, "
                      "а не продуктом. На холодной аудитории результат будет ниже.")
 
-    cfg["_pilot"] = {"name": label, "grade": grade, "scale_haircut": haircut,
+    cfg["_pilot"] = {"decay_from_tail": decay_est or None,
+                     "name": label, "grade": grade, "scale_haircut": haircut,
                      "same_geography": same_geo, "control_group": bool(p.get("control_group")),
                      "applied": applied, "power": power, "uplift": uplift}
     cfg.setdefault("_notes", []).extend(notes)
@@ -1634,8 +1715,41 @@ TORNADO_VALUE = [("Конверсия в заявку (все каналы)", "c
                  ("Оборот после растранзачивания", ("base_activation", "turnover_after"))]
 
 
+# Драйверы, у которых движение на ±25% бессмысленно. Срок жизни эффекта — главный
+# из них: вопрос не «на четверть дольше», а «держится только окно замера или не гаснет
+# вовсе». На живых цифрах между этими границами разница в четыре с лишним раза, и без
+# этой строки человек видит чувствительность к кэшбэку, но не к самому большому
+# допущению расчёта.
+def _decay_bounds(cfg):
+    """Нижняя граница — сколько наблюдали (дальше окна замера доказательств нет).
+    Верхняя — ноль, то есть «не затухает» в терминах движка."""
+    obs = g(cfg.get("pilot") or {}, "duration_months")
+    cur = g(cfg.get("base_activation") or {}, "decay_months")
+    low = obs or cur or 6.0
+    return [low, 0.0]
+
+
+TORNADO_EXPLICIT = [("Срок жизни эффекта: от окна замера до «не гаснет»",
+                     ("base_activation", "decay_months"), _decay_bounds)]
+
+
 def tornado(cfg, base_npv, delta=0.25):
     out = []
+    for label, path, bounds in TORNADO_EXPLICIT:
+        sec, key = path
+        # раздела нет — драйвера нет; ноль в самом ключе при этом законен
+        # и означает «не затухает», поэтому проверяем РАЗДЕЛ, а не значение
+        if not isinstance(cfg.get(sec), dict):
+            continue
+        swing = []
+        for v in bounds(cfg):
+            c = copy.deepcopy(cfg)
+            c[sec][key] = v
+            swing.append(evaluate(c)[1]["npv"])
+        out.append({"driver": label, "npv_low": min(swing), "npv_high": max(swing),
+                    "swing": abs(swing[1] - swing[0]),
+                    "swing_pct_of_base": round(abs(swing[1] - swing[0]) / abs(base_npv) * 100, 1)
+                    if base_npv else None})
     for label, path in (TORNADO_VALUE if is_value_mode(cfg) else TORNADO):
         swing = []
         for mult in (1 - delta, 1 + delta):

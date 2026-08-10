@@ -125,8 +125,19 @@
     кто пилот проводил, — поэтому спрашиваем.</p>
     <p class="hint">Прирост поведения — это не то же, что конверсия: он считается блоком
     «Растранзачивание своей базы» на шаге допущений, где задаются «до» и «после».</p>
+    <label class="field">
+      <span>Хвост окна — сколько последних месяцев замера взяты отдельно</span>
+      <input name="pilot.tail_months" inputmode="decimal" placeholder="2–3"
+             value="{{ pilot.get('tail_months', '') }}">
+    </label>
+    <p class="hint">Помесячная разбивка обычно недоступна, а два среза за разные периоды
+    достаются тем же запросом, что и одна средняя. Если хвост равен средней — эффект вышел
+    на полку. Если ниже — движок сам посчитает, за сколько месяцев эффект гаснет, и это
+    будет замер, а не догадка. Три месяца устойчивее двух: декабрь по тратам аномален.</p>
+
     <table class="claims">
-      <thead><tr><th style="width:55%">Параметр</th><th style="width:35%">Значение по пилоту</th><th></th></tr></thead>
+      <thead><tr><th style="width:44%">Параметр</th><th style="width:22%">Среднее за окно</th>
+        <th style="width:22%">За хвост окна</th><th></th></tr></thead>
       <tbody id="metrics">
         {% for key, val in (pilot.metrics or {}).items() %}
         <tr class="metric">
@@ -140,6 +151,9 @@
             </select>
           </td>
           <td><input name="metric.{{ loop.index0 }}.value" value="{{ val }}"></td>
+          <td><input name="metric.{{ loop.index0 }}.tail"
+                     value="{{ (pilot.metrics_tail or {}).get(key, '') }}"
+                     placeholder="если есть"></td>
           <td><button type="button" class="ghost del">✕</button></td>
         </tr>
         {% endfor %}
@@ -210,6 +224,7 @@ document.getElementById('addmetric').addEventListener('click', () => {
   const opts = CHOICES.map(k => `<option value="${k}">${LABELS[k] || k} (${k})</option>`).join('');
   tr.innerHTML = `<td><select name="metric.0.key">${opts}</select></td>
                   <td><input name="metric.0.value"></td>
+                  <td><input name="metric.0.tail" placeholder="если есть"></td>
                   <td><button type="button" class="ghost del">✕</button></td>`;
   metrics.appendChild(tr);
   renumber();
