@@ -484,6 +484,41 @@ check("«Без медиаплана считать нечего» замене�
       "либо источник эффекта на своей базе" in _lbl,
       "инициатива без привлечения — законный расчёт, движок сам так её называет")
 
+# Сценарии не различают инициативы на своей базе (BACKLOG 50).
+_s50 = calc.analyze(calc.prepare(json.loads(
+    (ROOT / "cases" / "ai_collections_youth.json").read_text("utf-8"))))
+_npvs = {_s50["scenarios"][k]["npv"] for k in ("pessimistic", "base", "optimistic")}
+check("Одинаковые сценарии распознаются как одинаковые",
+      len(_npvs) == 1 and _s50["verdict"]["scenarios_flat"] is True,
+      f"все три дали {_npvs.pop():,}")
+check("Вердикт не выдаёт это за подтверждение тремя сценариями",
+      "НЕ РАЗЛИЧАЮТ" in _s50["verdict"]["recommendation_by_npv"] and
+      "во всех сценариях" not in _s50["verdict"]["recommendation_by_npv"],
+      "«положительный NPV во всех сценариях» здесь означало «одно число трижды»")
+check("И сказано, почему так вышло",
+      any("СЦЕНАРИИ НЕ ТРОГАЮТ ДРАЙВЕРЫ СВОЕЙ БАЗЫ" in v for v in _s50["validation"]),
+      "множители не касаются uplift растранзачивания и монетизации")
+_s50b = calc.analyze(calc.prepare(json.loads(
+    (ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))))
+check("У обычной инициативы сценарии по-прежнему различаются",
+      _s50b["verdict"]["scenarios_flat"] is False and
+      "НЕ РАЗЛИЧАЮТ" not in _s50b["verdict"]["recommendation_by_npv"])
+
+# Каталог: значения ценности клиента приходят от заказчика и обязаны доезжать целиком
+check("Ценность детской карты — 4 424 ₽",
+      params.PRODUCT_CATALOG["kids_card"]["value"]["kids"] == 4424)
+check("Молодёжная кредитная карта в каталоге, с 18 лет и своей ценностью",
+      params.PRODUCT_CATALOG["youth_credit_card"]["value"]["youth"] == 21285 and
+      calc.PRODUCT_AGE["youth_credit_card"][0] == 18)
+check("Кредитная карта помечена кредитной — иначе CoR не спросят",
+      "youth_credit_card" in calc.CREDIT_PRODUCTS,
+      "без этого Cost of Risk = 0 прошёл бы без единого слова")
+_cc = params.segment_defaults("youth", "youth_credit_card")
+check("Подросткам кредитная карта недоступна",
+      params.segment_defaults("teens", "youth_credit_card") is None and _cc is not None)
+check("Новый продукт попал в группу с готовой ценностью",
+      "youth_credit_card" in {k for k, _ in params.PRODUCT_GROUPS[0][1]})
+
 # ROMI и LTV на экране результата (BACKLOG 48, 49, 57).
 _r48 = json.loads((ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))
 _r48["costs"]["it_dev"] = 500_000_000
