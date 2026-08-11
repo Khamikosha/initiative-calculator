@@ -224,7 +224,7 @@ def apply_product_economics(cfg, product):
     ue = cfg.setdefault("unit_economics", {})
     ue["mode"] = econ["mode"]
     if econ["mode"] == calc.MODE_VALUE:
-        # Горизонт и ставка идут из модели продукта: ценность посчитана именно на них,
+        # Горизонт и ставка идут из модели продукта: NPV продукта посчитан именно на них,
         # и расхождение сделало бы затраты и доходы несопоставимыми.
         ue["value_horizon_months"] = econ["value_horizon_months"]
         meta = cfg.setdefault("meta", {})
@@ -266,7 +266,7 @@ def prefilled_summary(init, cfg):
     """
     rows, ue, meta = [], cfg.get("unit_economics", {}), cfg.get("meta", {})
     if ue.get("mode") == calc.MODE_VALUE:
-        rows.append(("Экономика клиента", "готовая ценность из модели продукта",
+        rows.append(("Экономика клиента", "готовый NPV из модели продукта",
                      "каталог продуктов"))
         rows.append(("Горизонт оценки", f'{meta.get("horizon_months", 0):.0f} мес',
                      "модель продукта"))
@@ -274,7 +274,7 @@ def prefilled_summary(init, cfg):
                      f'{meta.get("discount_rate_annual", 0) * 100:.0f}%', "модель продукта"))
     else:
         rows.append(("Экономика клиента", "собирается снизу вверх: баланс, ставки, отток",
-                     "у продукта нет готовой ценности"))
+                     "у продукта нет готового NPV"))
 
     for seg in cfg.get("audience", {}).get("segments") or []:
         sid = seg.get("id")
@@ -290,7 +290,7 @@ def prefilled_summary(init, cfg):
                      + (f' · проникновение {pen:.0%}' if pen else ""),
                      "введено вручную" if "target_size" in own else "реестр"))
         if seg.get("value_per_client"):
-            rows.append((f"{name} — ценность клиента",
+            rows.append((f"{name} — NPV продукта на клиента",
                          f'{calc.nf(seg["value_per_client"])} ₽',
                          "введено вручную" if "value_per_client" in own else "каталог продуктов"))
         if seg.get("operating_income_annual"):

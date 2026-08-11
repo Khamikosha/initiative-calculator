@@ -351,7 +351,7 @@ check("При хорошем индексе вердикт не понижает
 # ------------------------------- 13. Режим готовой ценности клиента (value_per_client)
 VAL = json.loads((CASES / "product_kids_deposit.json").read_text(encoding="utf-8"))
 v_res = calc.analyze(calc.resolve_segments(copy.deepcopy(VAL)))
-check("Режим ценности отражён в результате", v_res["pl"]["mode"] == "value_per_client")
+check("Режим NPV продукта отражён в результате", v_res["pl"]["mode"] == "value_per_client")
 check("Валовая маржа = инкремент × ценность клиента",
       abs(v_res["pl"]["total_gross_margin"]
           - v_res["funnel"]["incremental_clients"] * v_res["pl"]["value_per_client"])
@@ -360,7 +360,7 @@ check("Валовая маржа = инкремент × ценность кли
       f'{v_res["funnel"]["incremental_clients"] * v_res["pl"]["value_per_client"]:,}')
 check("LTV на клиента равен присланной ценности",
       abs(v_res["pl"]["ltv_per_client"] - v_res["pl"]["value_per_client"]) <= 1)
-check("Срок окупаемости в режиме ценности не считается",
+check("Срок окупаемости в режиме NPV продукта не считается",
       v_res["pl"]["payback_months"] is None)
 check("Отсутствие окупаемости объясняется, а не выдаётся за её отсутствие",
       any("НЕ считается" in m for m in v_res["validation"]) and
@@ -372,11 +372,11 @@ _base = calc.resolve_segments(copy.deepcopy(VAL))
 check("Пессимистичный сценарий бьёт по ценности ровно множителем маржи",
       abs(_pess["unit_economics"]["value_per_client"]
           - _base["unit_economics"]["value_per_client"] * 0.75) < 1)
-check("Множитель оттока в режиме ценности не применяется — иначе пессимизм считался бы дважды",
+check("Множитель оттока в режиме NPV продукта не применяется — иначе пессимизм считался бы дважды",
       _pess["unit_economics"]["monthly_churn"] == _base["unit_economics"]["monthly_churn"])
 
-check("Торнадо в режиме ценности крутит ценность, а не баланс с оборотом",
-      {d["driver"] for d in v_res["tornado"]} >= {"Ценность клиента"} and
+check("Торнадо в режиме NPV продукта крутит его, а не баланс с оборотом",
+      {d["driver"] for d in v_res["tornado"]} >= {"NPV продукта на клиента"} and
       not {d["driver"] for d in v_res["tornado"]} & {"Средний баланс", "Месячный оборот"})
 
 _bad = copy.deepcopy(VAL); _bad["meta"]["horizon_months"] = 24

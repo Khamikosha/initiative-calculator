@@ -8,9 +8,9 @@
 
 {% if has_value %}
 <div class="callout ok">
-  У продукта есть готовая ценность клиента из модели продукта — расчёт пойдёт по ней,
+  У продукта есть готовый NPV продукта из модели продукта — расчёт пойдёт по ней,
   а не по собранной снизу вверх юнит-экономике. Горизонт 36 месяцев и ставка 20% взяты
-  оттуда же: ценность посчитана именно на них.
+  оттуда же: NPV продукта посчитан именно на них.
 </div>
 {% endif %}
 
@@ -40,7 +40,7 @@
           <div><span>Проникновение</span>
             <b class="{{ 'warn-txt' if k.penetration and k.penetration >= 0.5 }}">{{ k.penetration | pct(0) }}</b></div>
           {% if k.value_per_client %}
-            <div><span>Ценность клиента</span><b>{{ k.value_per_client | money }}</b></div>
+            <div><span>NPV продукта на клиента</span><b>{{ k.value_per_client | money }}</b></div>
           {% endif %}
           {% if k.operating_income_annual %}
             <div><span>ОД на клиента в год</span><b>{{ k.operating_income_annual | money }}</b></div>

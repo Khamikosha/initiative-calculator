@@ -501,7 +501,7 @@
 <section class="card">
   <h3>Сколько стоит сам продукт</h3>
   <div class="tiles">
-    <div class="tile"><span>Ценность клиента</span><b>{{ pl.value_per_client | money(CUR) }}</b>
+    <div class="tile"><span>NPV продукта на клиента</span><b>{{ pl.value_per_client | money(CUR) }}</b>
       <small>дисконтированная, за {{ pl.horizon_months | num }} мес, без затрат на привлечение</small></div>
     <div class="tile"><span>На инкременте инициативы</span>
       <b>{{ (pl.value_per_client * f.incremental_clients) | mln(CUR) }}</b>
@@ -514,7 +514,7 @@
         <small>{{ 'выше предельного — платим больше, чем клиент стоит' if pl.incremental_cpa and pl.incremental_cpa > pl.max_cpa else 'укладывается в норму' }}</small></div>
     {% endif %}
   </div>
-  <small class="muted">Это ценность продукта на привлечённых клиентах, а <b>не</b> NPV
+  <small class="muted">Это NPV продукта на привлечённых клиентах, а <b>не</b> NPV
   инициативы: затраты сюда не входят. Полный NPV в разрезе источников требует правила
   разноса затрат — см. BACKLOG 38.</small>
 </section>

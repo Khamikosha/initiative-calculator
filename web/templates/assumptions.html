@@ -273,7 +273,7 @@
   {% set meta_ps = params.META | rejectattr('key', 'in', ('name', 'type', 'product')) | list %}
   {{ ptable(meta_ps, 'meta', cfg, [], chosen) }}
   {% if cfg.unit_economics.mode == 'value_per_client' %}
-    <small class="muted">Горизонт и ставка пришли из модели продукта: ценность клиента
+    <small class="muted">Горизонт и ставка пришли из модели продукта: NPV продукта на клиента
     посчитана именно на них. Меняя их здесь, вы делаете затраты и доходы несопоставимыми —
     движок остановит расчёт ошибкой ввода.</small>
   {% endif %}
