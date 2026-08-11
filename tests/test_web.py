@@ -982,6 +982,50 @@ check("Заявленный тип и заполненное содержимо�
       any("groups" in e for e in _mix_err),
       "конверсионный пилот с групповыми замерами — противоречие, а не данные")
 
+# Живая проверка и сохранение обязаны видеть ОДНО И ТО ЖЕ (BACKLOG 44).
+# Скрытая половина формы остаётся в DOM со значениями и уходит на сервер как есть:
+# если предпросмотр её учитывает, панель показывает «пилот доказателен» про замер,
+# которого в расчёте не будет.
+_mixed = {"kind": "behavioral", "name": "Москва", "control_group": True,
+          "baseline_rate": 0.52, "observed_rate": 0.61,
+          "sample_size": 14000, "control_size": 14000, "duration_months": 8,
+          "randomized": True, "matched_at_baseline": True,
+          "groups": [{"name": "МК", "role": "test", "metric": "monthly_turnover",
+                      "value_start": 22000, "value_end": 27400},
+                     {"name": "ОК", "role": "control", "metric": "monthly_turnover",
+                      "value_start": 21800, "value_end": 24000}]}
+_pv_beh = client.post("/api/pilot/preview", json={"pilot": _mixed}).json()
+check("Выбрано «поведение» — предпросмотр не считает мощность по конверсии",
+      not _pv_beh["errors"] and (_pv_beh.get("info") or {}).get("power") is None and
+      (_pv_beh.get("info") or {}).get("derived"),
+      "конверсия осталась в форме с прошлого переключения и в расчёт не идёт")
+_pv_conv = client.post("/api/pilot/preview",
+                       json={"pilot": dict(_mixed, kind="conversion")}).json()
+check("Выбрана «конверсия» — предпросмотр не считает разницу разниц",
+      not _pv_conv["errors"] and (_pv_conv.get("info") or {}).get("power") and
+      (_pv_conv.get("info") or {}).get("derived") is None)
+
+check("Ветка отбрасывается ОДНОЙ функцией, а не копией в каждом пути",
+      "strip_other_branch" in __import__("inspect").getsource(app_mod.form_to_pilot) and
+      "strip_other_branch" in __import__("inspect").getsource(app_mod.api_pilot_preview),
+      "третья копия правила разойдётся с остальными при первой правке")
+check("Отбрасывание описано данными, а не ветвлением по типу",
+      set(app_mod.PILOT_BRANCH_KEYS) == {"conversion", "behavioral"})
+
+_pv_saved = client.post("/api/pilot/preview", json={"pilot": _mixed}).json()
+check("Предпросмотр и сохранение показывают одно и то же",
+      (_pv_saved.get("info") or {}).get("derived") ==
+      (calc.apply_pilot(calc.validate_config({
+          **json.loads(json.dumps(params.defaults())),
+          "pilot": app_mod.strip_other_branch(json.loads(json.dumps(_mixed)))}))
+       ["_pilot"] or {}).get("derived"),
+      "иначе панель противоречит результату")
+
+check("Браузер не затирает введённое в скрытой ветке",
+      "branch[hidden] input" not in
+      (ROOT / "web" / "templates" / "pilot.html").read_text("utf-8"),
+      "переключиться посмотреть и потерять свои цифры человек не должен")
+
 # Веб собирал конфиг СВОЕЙ короткой сборкой — без apply_pilot и без normalize.
 # Значит пилот в приложении не применялся вовсе, а блок «что дал пилот» не мог
 # появиться в принципе. Тесты этого не видели, потому что дёргали apply_pilot

@@ -573,6 +573,26 @@ PILOT_FLAGS = ("control_group", "randomized", "matched_at_baseline")
 PILOT_TEXT = ("name", "geography", "rollout_geography", "audience")
 
 
+# Поля скрытой ветки остаются в форме со своими значениями и уходят на сервер как есть.
+# Чистить их должны ОБА пути — и сохранение, и живая проверка, — иначе панель «что
+# говорит движок» считает мощность по конверсии, которую человек ввёл до переключения
+# на «поведение», и противоречит результату: показано «пилот доказателен» про замер,
+# которого в расчёте не будет.
+#
+# Отдельной функцией, а не копией в каждом пути: третья копия правила расходится
+# с остальными при первой правке. В этом проекте так уже было с флагами и со сборкой
+# конфига.
+PILOT_BRANCH_KEYS = {"conversion": ("groups", "randomized", "matched_at_baseline"),
+                     "behavioral": ("baseline_rate", "observed_rate")}
+
+
+def strip_other_branch(p):
+    """Убирает из блока пилота поля той ветки, которую человек не выбрал."""
+    for k in PILOT_BRANCH_KEYS.get(p.get("kind"), ()):
+        p.pop(k, None)
+    return p
+
+
 def form_to_pilot(form, cfg):
     """Поля формы → раздел `pilot`. Пустая форма убирает раздел целиком."""
     if not form.get("has_pilot"):
@@ -626,16 +646,7 @@ def form_to_pilot(form, cfg):
     if pg:
         p["groups"] = pg
 
-    # Чужая ветка чистится ЗДЕСЬ, а не только в браузере: скрытые поля всё равно
-    # уходят на сервер, а конфиг, где заполнены и конверсия, и групповые замеры,
-    # движок справедливо отвергает — человек при этом видел только свою половину
-    # и не поймёт, о чём речь.
-    if p.get("kind") == "conversion":
-        for k in ("groups", "randomized", "matched_at_baseline"):
-            p.pop(k, None)
-    elif p.get("kind") == "behavioral":
-        for k in ("baseline_rate", "observed_rate"):
-            p.pop(k, None)
+    strip_other_branch(p)
 
     if metrics:
         p["metrics"] = metrics
@@ -702,7 +713,8 @@ async def api_pilot_preview(request: Request):
     """
     body = await request.json()
     probe = params.defaults()
-    probe["pilot"] = {k: v for k, v in (body.get("pilot") or {}).items() if v not in (None, "")}
+    probe["pilot"] = strip_other_branch(
+        {k: v for k, v in (body.get("pilot") or {}).items() if v not in (None, "")})
     try:
         calc.validate_config(probe)
     except calc.ConfigError as e:

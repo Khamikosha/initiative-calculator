@@ -297,10 +297,8 @@ document.querySelectorAll('.pkind').forEach(r =>
   r.addEventListener('change', () => { showBranch(); preview(); }));
 showBranch();
 
-document.getElementById('pilotform').addEventListener('submit', () => {
-  document.querySelectorAll('.branch[hidden] input, .branch[hidden] select')
-    .forEach(el => { if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
-});
+// Введённое в скрытой ветке НЕ затираем: человек мог переключиться, чтобы посмотреть,
+// и потерять свои цифры от этого он не должен. Чужую ветку отбрасывает сервер.
 
 function renumber() {
   [...metrics.querySelectorAll('tr.metric')].forEach((tr, i) => {
