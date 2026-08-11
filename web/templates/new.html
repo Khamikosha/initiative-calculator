@@ -24,11 +24,19 @@
     <label class="field">
       <span>Продукт</span>
       <select name="product">
-        {% for k, label in PRODUCTS %}
+        {% for group, items in PRODUCT_GROUPS %}
+        <optgroup label="{{ group }}">
+          {% for k, label in items %}
           <option value="{{ k }}" {{ 'selected' if init and init.product == k }}>{{ label }}</option>
+          {% endfor %}
+        </optgroup>
         {% endfor %}
       </select>
     </label>
+    <p class="hint">Продукт линейки подставит готовую ценность клиента — одно число
+    из валидированной модели, грейд A. Категория её не имеет: экономику придётся собрать
+    снизу вверх из десятка допущений, и вердикт будет опираться на них, а не на факт.
+    Берите категорию, когда конкретного продукта ещё нет.</p>
   </div>
 
   <label class="field">

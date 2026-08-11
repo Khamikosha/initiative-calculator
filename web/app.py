@@ -47,6 +47,7 @@ ENGINE_VERSION = hashlib.sha256((ROOT / "src" / "calc.py").read_bytes()).hexdige
 # Типы инициатив и продукты живут в реестре: от них зависит и форма, и подсказки навыка
 INITIATIVE_TYPES = params.TYPE_CHOICES
 PRODUCTS = params.PRODUCTS
+PRODUCT_GROUPS = params.PRODUCT_GROUPS
 PRODUCT_NAME = params.PRODUCT_NAME
 STEPS = [("brief", "Бриф"), ("pilot", "Пилот"), ("segments", "Сегменты"),
          ("panel", "Панель"), ("assumptions", "Допущения"), ("result", "Результат")]
@@ -79,6 +80,7 @@ tpl.env.filters["pct"] = lambda v, d=1: "—" if v is None else _fmt_num(float(v
 tpl.env.filters["from_json"] = lambda s: json.loads(s or "{}")
 tpl.env.globals.update(params=params, calc=calc, SEGMENTS=calc.SEGMENTS,
                        TYPES=INITIATIVE_TYPES, PRODUCTS=PRODUCTS, PRODUCT_NAME=PRODUCT_NAME,
+                       PRODUCT_GROUPS=PRODUCT_GROUPS,
                        STEPS=STEPS, ENGINE_VERSION=ENGINE_VERSION,
                        TYPE_META=params.INITIATIVE_TYPES)
 

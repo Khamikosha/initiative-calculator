@@ -421,6 +421,27 @@ check("Маржа спутника попадает в расчёт отдель
       f'{(_cres["pl"].get("margin_sources") or {}).get("companion", 0):,.0f} ₽')
 
 
+# Каталог продуктов делится по единственному признаку, который меняет работу человека:
+# есть готовая ценность клиента или экономику придётся собирать снизу вверх.
+check("Список продуктов разделён на две группы",
+      [g for g, _ in params.PRODUCT_GROUPS] and len(params.PRODUCT_GROUPS) == 2)
+check("Деление выведено из наличия ценности, а не проставлено вторым полем",
+      all(bool(params.PRODUCT_CATALOG[k].get("value")) == (i == 0)
+          for i, (_, items) in enumerate(params.PRODUCT_GROUPS) for k, _ in items),
+      "иначе каталог начнёт противоречить себе на первом же новом продукте")
+check("Обе группы непусты и вместе покрывают весь каталог",
+      sorted(k for _, items in params.PRODUCT_GROUPS for k, _ in items) ==
+      sorted(params.PRODUCT_CATALOG))
+check("Жаргона «родовая» в подписях продуктов не осталось",
+      not any("родов" in label.lower() for label in params.PRODUCT_NAME.values()),
+      "слово из систематики стояло прямо в выпадающем списке")
+
+_npage = client.get("/initiative/new").text
+check("Группы видны в самом списке, а не только в реестре",
+      _npage.count("<optgroup") == 2 and
+      all(g in _npage for g, _ in params.PRODUCT_GROUPS),
+      "разница объясняется списком, и объяснять её словами уже не нужно")
+
 # ------------------------------- Нагрузка шага «Допущения» (BACKLOG 43)
 # Мерить надо не число полей, а сколько человек ОБЯЗАН тронуть, чтобы получить ответ.
 # На шаге 178 полей, обязательных — восемь.
