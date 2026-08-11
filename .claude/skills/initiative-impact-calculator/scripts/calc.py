@@ -1980,14 +1980,40 @@ def tornado(cfg, base_npv, delta=0.25):
                         "swing_pct_of_base": round(abs(swing[1] - swing[0]) / abs(base_npv) * 100, 1) if base_npv else None})
     return sorted(out, key=lambda x: -x["swing"])
 
-def rice_score(cfg, incremental_clients, npv):
+def rice_score(cfg, incremental_clients, npv, pl=None):
+    """RICE. Охват — «скольких людей это затрагивает», а не «скольких мы привлекли».
+
+    Раньше в отсутствие явного значения брался инкремент, и у инициативы БЕЗ привлечения
+    охват выходил нулём: движок намеренно не кладёт растранзаченных в инкремент, чтобы
+    один человек не посчитался дважды. Итог — RICE = 0 при NPV в десятки миллионов, молча,
+    у каждой фичи и каждой доработки. Именно у того класса, ради приоритизации которого
+    RICE и считают.
+
+    Порядок источников: явно заданное → инкремент привлечения → те, чьё поведение
+    изменила инициатива на своей базе. Если охвата нет ни по одному — RICE не считается
+    вовсе. Ноль здесь не ответ, а признание, что мерить нечем: у инициативы, которая
+    никого не затрагивает, нет и приоритета.
+    """
     r = cfg.get("rice")
     if not r:
         return None
-    reach = g(r, "reach") or incremental_clients
+    reach, source = g(r, "reach"), "задан вручную"
+    if not reach:
+        reach, source = incremental_clients, "инкремент привлечения"
+    if not reach:
+        # своя база: тот, чьё поведение изменилось, — это и есть охват инициативы
+        det = (pl or {}).get("base_activation") or {}
+        reach = det.get("activated_clients") or 0
+        source = "клиенты, сменившие поведение (своя база)"
+    if not reach:
+        return {"reach": 0, "impact": g(r, "impact"), "confidence": g(r, "confidence"),
+                "effort_person_months": g(r, "effort"), "rice_score": None,
+                "reach_source": "нечем — охват не задан и не выводится",
+                "npv_per_person_month": round(npv / max(g(r, "effort", 1), 0.1))}
     score = reach * g(r, "impact", 1) * g(r, "confidence", 0.5) / max(g(r, "effort", 1), 0.1)
     return {"reach": round(reach), "impact": g(r, "impact"), "confidence": g(r, "confidence"),
             "effort_person_months": g(r, "effort"), "rice_score": round(score, 1),
+            "reach_source": source,
             "npv_per_person_month": round(npv / max(g(r, "effort", 1), 0.1))}
 
 def frk_ladder(cfg):
@@ -2420,6 +2446,22 @@ def flags(cfg, f, pl):
             + f" Бюджет, который эта экономика выдерживает: {nf(pl['budget_at_max_cpa'])} ₽.")
     if pl["payback_months"] is None and pl.get("mode") != MODE_VALUE:
         out.append("Окупаемости на заданном горизонте нет.")
+    # Deadweight там, где за клиента платят. Собственная методичка типа «Пилот или акция»
+    # объявляет его обязательным, а движок не проверял ни разу — при том что каннибализацию
+    # при нуле окликает всегда. Асимметрия ровно обратная тому, что написано.
+    #
+    # Триггер по поведению конфига, а не по `meta.type`: движок тип принципиально не читает,
+    # и заводить исключение ради одной проверки значило бы сломать это правило. Платим
+    # за клиента — значит вопрос «а взял бы он и так» стоит деньгами, независимо от того,
+    # что человек выбрал в выпадающем списке.
+    if (g(cfg.get("costs") or {}, "acq_cost_per_client") > 0
+            and g(cfg.get("funnel") or {}, "deadweight") <= 0):
+        out.append(
+            "DEADWEIGHT = 0 ПРИ ВЫПЛАТЕ ЗА КЛИЕНТА: подарок или бонус получают все, кто "
+            "сработал, включая тех, кто оформил бы и без него. «Скидка дала +40%» "
+            "бессмысленно, если половина взяла бы и так — а при нуле модель считает, что "
+            "не взял бы никто. Это самое дорогое допущение акции, и оно сейчас "
+            "не задано, а не подтверждено.")
     if pl.get("acquisition_payout_total"):
         over = pl["gross_clients_paid"] - f["incremental_clients"]
         out.append(f"Выплаты идут за {nf(pl['gross_clients_paid'])} сработавших клиентов, а инкремент — "
@@ -2530,7 +2572,7 @@ def analyze(cfg):
            "segments": cfg.get("_segments"), "funnel": view,
            "pl": {k: v for k, v in pl.items() if k != "monthly"}, "monthly": pl["monthly"],
            "scenarios": {}, "tornado": tornado(cfg, pl["npv"]),
-           "rice": rice_score(cfg, funnel["_incremental_raw"], pl["npv"]),
+           "rice": rice_score(cfg, funnel["_incremental_raw"], pl["npv"], pl),
            "confidence": confidence_index(cfg), "frk_ladder": frk_ladder(cfg),
            "flags": flags(cfg, view, pl), "validation": validate(cfg, view, pl)}
     for name, s in SCEN.items():

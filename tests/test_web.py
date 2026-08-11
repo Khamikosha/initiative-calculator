@@ -421,6 +421,69 @@ check("Маржа спутника попадает в расчёт отдель
       f'{(_cres["pl"].get("margin_sources") or {}).get("companion", 0):,.0f} ₽')
 
 
+# RICE у инициативы без привлечения (BACKLOG 45). Инкремента там нет по построению —
+# движок намеренно не кладёт растранзаченных в него, — и охват выходил нулём.
+# Молча, у каждой фичи и каждой доработки, то есть ровно у того класса, ради
+# приоритизации которого RICE и считают.
+_fcfg = json.loads(json.dumps(params.defaults()))
+_fcfg["meta"].update(name="Фича", type="comms", horizon_months=24)
+_fcfg["channels"] = []
+_fcfg["audience"] = {"target_size": 0}
+_fcfg["base_activation"] = {
+    "name": "Раздел «Цели»", "eligible_clients": 4_000_000, "reach_share": 0.35,
+    "technically_reachable": 0.9, "uplift_rate": 0.18, "attribution_share": 1.0,
+    "measured_against_control": 1, "turnover_before": 0, "turnover_after": 0,
+    "balance_before": 0, "balance_after": 25000, "decay_months": 18}
+_fcfg["rice"] = {"reach": 0, "impact": 2, "confidence": 0.7, "effort": 18,
+                 "hurdle_ltv_cac": 3}
+_fres = calc.analyze(calc.prepare(_fcfg))
+check("RICE у инициативы без привлечения больше не ноль",
+      _fres["rice"]["rice_score"] > 0,
+      f'{_fres["rice"]["rice_score"]} при NPV {_fres["pl"]["npv"]:,}')
+check("И сказано, откуда взят охват",
+      "своя база" in (_fres["rice"].get("reach_source") or ""),
+      _fres["rice"].get("reach_source"))
+_acq = calc.analyze(calc.prepare(json.loads(
+    (ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))))
+check("У инициативы с привлечением охват по-прежнему из инкремента",
+      "инкремент" in (_acq["rice"].get("reach_source") or ""))
+_none = json.loads(json.dumps(_fcfg))
+_none.pop("base_activation")
+check("Когда охват вывести неоткуда — RICE не считается, а не равен нулю",
+      calc.analyze(calc.prepare(_none))["rice"]["rice_score"] is None,
+      "ноль читается как «низкий приоритет», а не как «мерить нечем»")
+
+# Deadweight там, где за клиента платят (BACKLOG 47). Методичка объявляла его
+# обязательным для акций, движок не проверял ни разу, а каннибализацию при нуле
+# окликал всегда.
+_dw = json.loads((ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))
+_dw["costs"]["acq_cost_per_client"] = 500
+_dw["funnel"]["deadweight"] = 0.0
+check("Выплата за клиента при нулевом deadweight — флаг",
+      any("DEADWEIGHT = 0" in x for x in calc.analyze(calc.prepare(_dw))["flags"]))
+_dw2 = json.loads(json.dumps(_dw)); _dw2["funnel"]["deadweight"] = 0.35
+check("Заданный deadweight флаг снимает",
+      not any("DEADWEIGHT = 0" in x for x in calc.analyze(calc.prepare(_dw2))["flags"]))
+_dw3 = json.loads(json.dumps(_dw)); _dw3["costs"]["acq_cost_per_client"] = 0
+check("Без выплаты за клиента флага нет — это не общая придирка",
+      not any("DEADWEIGHT = 0" in x for x in calc.analyze(calc.prepare(_dw3))["flags"]),
+      "триггер по поведению конфига, а не по meta.type, который движок не читает")
+
+# Подписи, противоречившие движку (BACKLOG 46)
+_li = int(client.post("/initiative/new", data={
+    "name": "Подписи", "type": "comms", "product": "card"},
+    follow_redirects=False).headers["location"].split("/")[2])
+_lbl = client.get(f"/initiative/{_li}/assumptions").text
+check("Формулировки «на результат не влияют» больше нет",
+      "на результат не влияют" not in _lbl,
+      "движок meta.type не читает: ненулевое значение считается всегда")
+check("И сказано прямо, что ненулевое значение считается наравне",
+      "считается наравне с остальными" in _lbl)
+check("«Без медиаплана считать нечего» заменено на верное",
+      "Без медиаплана считать нечего" not in _lbl and
+      "либо источник эффекта на своей базе" in _lbl,
+      "инициатива без привлечения — законный расчёт, движок сам так её называет")
+
 # Каталог продуктов делится по единственному признаку, который меняет работу человека:
 # есть готовая ценность клиента или экономику придётся собирать снизу вверх.
 check("Список продуктов разделён на две группы",
