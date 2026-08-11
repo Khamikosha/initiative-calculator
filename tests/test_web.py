@@ -484,6 +484,67 @@ check("«Без медиаплана считать нечего» замене�
       "либо источник эффекта на своей базе" in _lbl,
       "инициатива без привлечения — законный расчёт, движок сам так её называет")
 
+# ROMI и LTV на экране результата (BACKLOG 48, 49, 57).
+_r48 = json.loads((ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))
+_r48["costs"]["it_dev"] = 500_000_000
+_res48 = calc.analyze(calc.prepare(_r48))
+check("Рядом с ROMI считается отдача ко всем затратам",
+      _res48["pl"]["roi_total"] is not None and
+      _res48["pl"]["roi_total"] < _res48["pl"]["romi"],
+      f'ROMI {_res48["pl"]["romi"]} против {_res48["pl"]["roi_total"]} по всем затратам')
+check("Доля маркетинга в затратах названа числом",
+      _res48["pl"]["marketing_share_of_costs"] < 0.2)
+check("И когда маркетинг — меньшая часть затрат, об этом сказано флагом",
+      any("ROMI СЧИТАЕТСЯ НЕ КО ВСЕМ" in x for x in _res48["flags"]),
+      "IT на 500 млн роняет NPV в двенадцать раз, ROMI не двигает вовсе")
+_r48b = json.loads(json.dumps(_r48)); _r48b["costs"]["it_dev"] = 0
+check("При обычной структуре затрат флага нет",
+      not any("ROMI СЧИТАЕТСЯ НЕ КО ВСЕМ" in x
+              for x in calc.analyze(calc.prepare(_r48b))["flags"]))
+
+# LTV — ценность привлечённого клиента, поэтому маржа действующей базы в неё не входит
+_l49 = json.loads((ROOT / "cases" / "youth_card_launch_2026.json").read_text("utf-8"))
+_with_ba = calc.analyze(calc.prepare(json.loads(json.dumps(_l49))))["pl"]
+_no_ba = json.loads(json.dumps(_l49)); _no_ba.pop("base_activation", None)
+_wo_ba = calc.analyze(calc.prepare(_no_ba))["pl"]
+check("Растранзачивание больше не завышает LTV привлечённого клиента",
+      _with_ba["ltv_per_client"] == _wo_ba["ltv_per_client"],
+      f'{_with_ba["ltv_per_client"]:,} ₽ в обоих случаях — было завышение на 30%')
+check("И не завышает предельный CPA с допустимым бюджетом",
+      _with_ba["max_cpa"] == _wo_ba["max_cpa"] and
+      _with_ba["budget_at_max_cpa"] == _wo_ba["budget_at_max_cpa"],
+      "именно на этот вопрос блок и отвечает: на какой бюджет можно идти")
+check("Маржа привлечённого клиента отделена от общей",
+      _with_ba["acquired_gross_margin"] < _with_ba["total_gross_margin"],
+      "спутник и связанный клиент входят, растранзачивание и натуральный эффект — нет")
+
+# Плитки: у инициативы без привлечения четыре из шести были прочерками
+_t57 = int(client.post("/initiative/new", data={
+    "name": "Фича без привлечения", "type": "comms", "product": "card"},
+    follow_redirects=False).headers["location"].split("/")[2])
+client.post(f"/initiative/{_t57}/assumptions", data={
+    "costs.campaign_months": "6", "has_base_activation": "1",
+    "base_activation.name": "Раздел «Цели»",
+    "base_activation.eligible_clients": "4000000",
+    "base_activation.reach_share": "0.35",
+    "base_activation.technically_reachable": "0.9",
+    "base_activation.uplift_rate": "0.18",
+    "base_activation.attribution_share": "1",
+    "base_activation.balance_after": "25000",
+    "base_activation.decay_months": "18", "action": "save"}, follow_redirects=False)
+_tr = client.post(f"/initiative/{_t57}/calculate", follow_redirects=False)
+_thtml = client.get(_tr.headers["location"]).text
+# ищем ТОЛЬКО в блоке плиток: «Инкрементальный CPA» есть ещё и в таблице сценариев
+# блок плиток — от его начала до первой карточки-секции ниже
+_tiles = _thtml.split('<div class="tiles">')[1].split('<section class="card">')[0]
+check("У инициативы без привлечения плитки привлечения не показаны",
+      "Инкрементальный CPA" not in _tiles and "LTV / CAC" not in _tiles,
+      "четыре плитки из шести были прочерками или искажены")
+check("И сказано, почему их нет",
+      "метрики привлечения" in _thtml and "не считаются и здесь не показаны" in _thtml)
+check("NPV при этом на месте",
+      "NPV" in _thtml and "Чистый эффект" in _thtml)
+
 # Каталог продуктов делится по единственному признаку, который меняет работу человека:
 # есть готовая ценность клиента или экономику придётся собирать снизу вверх.
 check("Список продуктов разделён на две группы",

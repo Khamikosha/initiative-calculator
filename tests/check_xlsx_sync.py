@@ -157,6 +157,7 @@ MARKERS = [
     "Охват упёрся в потолок ЦА", "держится на brand-uplift", "LTV/CAC",
     "Окупаемости на заданном горизонте нет", "Выплаты идут за",
     "Cost of Risk = 0", "Каннибализация = 0",
+    "DEADWEIGHT = 0", "ROMI СЧИТАЕТСЯ НЕ КО ВСЕМ ЗАТРАТАМ",
 ]
 
 it_name = next((s for s in wb.sheetnames if s.lower() == "итог"), None)

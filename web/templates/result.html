@@ -20,16 +20,39 @@
   {% endif %}
 </div>
 
+{# Плитки привлечения показываются только там, где привлечение есть. У инициативы
+   на своей базе четыре из шести были прочерками или искажёнными числами — при том что
+   движок в проверке вводных уже писал «метрики привлечения для него не считаются». #}
+{% set has_acq = f.incremental_clients and f.incremental_clients > 0 %}
 <div class="tiles">
+  {% if has_acq %}
   <div class="tile"><span>Инкрементальные клиенты</span><b>{{ f.incremental_clients | num }}</b></div>
+  {% endif %}
   <div class="tile"><span>NPV</span><b class="{{ 'neg' if pl.npv < 0 }}">{{ pl.npv | mln(CUR) }}</b></div>
-  <div class="tile"><span>ROMI</span><b>{{ pl.romi if pl.romi is not none else "—" }}</b></div>
+  <div class="tile"><span>Чистый эффект</span>
+    <b class="{{ 'neg' if pl.net_effect < 0 }}">{{ pl.net_effect | mln(CUR) }}</b>
+    <small>недисконтированный</small></div>
+  {% if pl.romi is not none %}
+  <div class="tile"><span>ROMI</span><b>{{ pl.romi }}</b>
+    <small>к маркетинговым затратам{% if pl.marketing_share_of_costs is not none %},
+      это {{ pl.marketing_share_of_costs | pct(0) }} от всех{% endif %}</small></div>
+  {% endif %}
+  {% if pl.roi_total is not none %}
+  <div class="tile"><span>Отдача ко всем затратам</span><b>{{ pl.roi_total }}</b>
+    <small>включая IT, opex и разовые</small></div>
+  {% endif %}
+  {% if has_acq %}
   <div class="tile"><span>Инкрементальный CPA</span><b>{{ pl.incremental_cpa | money(CUR) }}</b></div>
-  <div class="tile"><span>Окупаемость</span>
-    <b>{{ (pl.payback_months ~ " мес") if pl.payback_months else "нет" }}</b></div>
   <div class="tile"><span>LTV / CAC</span><b>{{ pl.ltv_to_cac if pl.ltv_to_cac is not none else "—" }}</b>
     {% if pl.max_cpa %}<small>платить можно до {{ pl.max_cpa | money(CUR) }}</small>{% endif %}</div>
+  {% endif %}
+  <div class="tile"><span>Окупаемость</span>
+    <b>{{ (pl.payback_months ~ " мес") if pl.payback_months else "нет" }}</b></div>
 </div>
+{% if not has_acq %}
+<p class="muted">Инициатива никого не привлекает — метрики привлечения (CPA, LTV/CAC,
+инкремент) для неё не считаются и здесь не показаны. Эффект целиком в блоках ниже.</p>
+{% endif %}
 
 <section class="card">
   <h3>Сценарии</h3>

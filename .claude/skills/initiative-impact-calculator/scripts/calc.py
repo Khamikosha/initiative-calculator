@@ -1763,6 +1763,8 @@ def run_pl(cfg, funnel):
                      "margin_natural": gm_nat,
                      "costs": cost, "net": net, "cumulative": cum, "cumulative_discounted": cum_disc})
     total_gm = sum(r["gross_margin"] for r in rows); total_cost = sum(r["costs"] for r in rows)
+    # Маржа привлечённого клиента: свой продукт плюс то, что появляется вместе с ним.
+    acq_gm = sum(r["margin_own"] + r["margin_companion"] + r["margin_linked"] for r in rows)
     mkt_cost = media + g(k, "production") + acq_total
     effect = effect_summary(u, rows, r_m, total_gm - total_cost, cum_disc)
 
@@ -1857,17 +1859,35 @@ def run_pl(cfg, funnel):
             "total_gross_margin": round(total_gm), "total_costs": round(total_cost),
             "net_effect": round(total_gm - total_cost), "npv": round(cum_disc), "payback_months": payback,
             "marketing_cost": round(mkt_cost),
+            # ROMI по определению считается к МАРКЕТИНГОВЫМ затратам, и менять это нельзя —
+            # иначе цифра перестанет быть сопоставимой с теми, что ходят по отчётам.
+            # Но на инициативе, где маркетинг это малая часть расходов, она вводит
+            # в заблуждение: IT-разработка на 500 млн роняет NPV в двенадцать раз,
+            # а ROMI не двигает вовсе. Поэтому рядом считается отдача ко ВСЕМ затратам,
+            # и доля маркетинга в них называется явно.
             "romi": round((total_gm - mkt_cost) / mkt_cost, 2) if mkt_cost > 0 else None,
+            "roi_total": round((total_gm - total_cost) / total_cost, 2) if total_cost > 0 else None,
+            "marketing_share_of_costs": (round(mkt_cost / total_cost, 3)
+                                         if total_cost > 0 else None),
             "incremental_cpa": round(mkt_cost / inc) if inc > 0 else None,
-            "ltv_per_client": round(total_gm / inc) if inc > 0 else None,
-            "ltv_to_cac": round((total_gm / inc) / (mkt_cost / inc), 2) if inc > 0 and mkt_cost > 0 else None,
+            # LTV — ценность ПРИВЛЕЧЁННОГО клиента, поэтому в числителе только та маржа,
+            # которую он приносит. Спутник и связанный клиент входят: копилка поверх карты
+            # и родитель, платящий за ребёнка, появляются вместе с этим клиентом и без него
+            # не появились бы. Растранзачивание и натуральный эффект НЕ входят: это деньги
+            # действующей базы, которых движок намеренно не кладёт в инкремент, чтобы один
+            # человек не посчитался дважды. Раньше в числителе стоял весь `total_gm`, и на
+            # живом кейсе это завышало LTV, предельный CPA и допустимый бюджет на 30% —
+            # тем сильнее, чем важнее для инициативы её собственная база.
+            "acquired_gross_margin": round(acq_gm),
+            "ltv_per_client": round(acq_gm / inc) if inc > 0 else None,
+            "ltv_to_cac": round((acq_gm / inc) / (mkt_cost / inc), 2) if inc > 0 and mkt_cost > 0 else None,
             # Сколько вообще МОЖНО платить за клиента, а не сколько платим. Переворачивает
             # разговор: вместо «дайте бюджет, посчитаем что вышло» — «клиент стоит столько,
             # платить можно до стольки, ваш канал в это не влезает».
             "hurdle_ltv_cac": hurdle,
-            "max_cpa": round((total_gm / inc) / hurdle) if inc > 0 else None,
-            "budget_at_max_cpa": round(inc * (total_gm / inc) / hurdle) if inc > 0 else None,
-            "breakeven_clients": round(total_cost / (total_gm / inc)) if inc > 0 and total_gm > 0 else None,
+            "max_cpa": round((acq_gm / inc) / hurdle) if inc > 0 else None,
+            "budget_at_max_cpa": round(inc * (acq_gm / inc) / hurdle) if inc > 0 else None,
+            "breakeven_clients": round(total_cost / (acq_gm / inc)) if inc > 0 and acq_gm > 0 else None,
             "monthly": [{kk: (round(vv) if isinstance(vv, float) else vv) for kk, vv in r.items()} for r in rows]}
 
 def evaluate(cfg):
@@ -2444,6 +2464,15 @@ def flags(cfg, f, pl):
             f"до {nf(pl['max_cpa'])} ₽, фактически платим {nf(pl['incremental_cpa'])} ₽"
             + (f" — превышение в {over:.1f} раза." if over else ".")
             + f" Бюджет, который эта экономика выдерживает: {nf(pl['budget_at_max_cpa'])} ₽.")
+    share = pl.get("marketing_share_of_costs")
+    if pl.get("romi") is not None and share is not None and share < 0.5:
+        out.append(
+            f"ROMI СЧИТАЕТСЯ НЕ КО ВСЕМ ЗАТРАТАМ: в его знаменателе только маркетинг — "
+            f"{nf(pl['marketing_cost'])} ₽ из {nf(pl['total_costs'])} ₽, то есть "
+            f"{share:.0%}. IT-разработка, постоянные расходы и прочие разовые в него "
+            f"не входят, хотя в NPV входят полностью. Отдача ко всем затратам здесь "
+            f"{pl.get('roi_total')}, а не {pl['romi']} — на инвесткомитете нужна вторая "
+            "цифра, первая для маркетингового разговора.")
     if pl["payback_months"] is None and pl.get("mode") != MODE_VALUE:
         out.append("Окупаемости на заданном горизонте нет.")
     # Deadweight там, где за клиента платят. Собственная методичка типа «Пилот или акция»
