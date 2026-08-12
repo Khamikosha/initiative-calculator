@@ -580,6 +580,33 @@ check("И сказано, почему их нет",
 check("NPV при этом на месте",
       "NPV" in _thtml and "Чистый эффект" in _thtml)
 
+def _safe_validate(cfg):
+    try:
+        calc.validate_config(cfg); return True
+    except calc.ConfigError:
+        return False
+
+
+# Старый конфиг с посегментным ключом на уровне раздела чинится при чтении.
+# Такая запись могла остаться от прежней версии, прийти из бэкапа или правки руками.
+# Человек упирался в «неизвестный ключ» на КАЖДОМ шаге и не мог его убрать: поля
+# такого в форме нет, а конфиг правится только через форму.
+_hi = int(client.post("/initiative/new", data={
+    "name": "Старый конфиг", "type": "product_launch", "product": "broker"},
+    follow_redirects=False).headers["location"].split("/")[2])
+_hcon = _db.connect()
+_hcfg = json.loads(_db.get_initiative(_hcon, _hi)["config_json"])
+_hcfg.setdefault("audience", {})["product_clients"] = 250000     # порча, как в проде
+_db.update_initiative(_hcon, _hi, config=_hcfg)
+check("Испорченный ключ действительно ломает движок",
+      not _safe_validate(json.loads(_db.get_initiative(_db.connect(), _hi)["config_json"])),
+      "иначе тест ничего не проверяет")
+_hload = app_mod.config_of(_db.get_initiative(_db.connect(), _hi))
+check("Загрузка конфига убирает посегментный ключ с уровня раздела",
+      "product_clients" not in (_hload.get("audience") or {}))
+check("И после этого страница открывается без ошибки движка",
+      "Движок отверг конфиг" not in client.get(f"/initiative/{_hi}/assumptions").text)
+
 # Ставка, обнулённая взвешиванием (BACKLOG 58). Найдено дважды на живых постановках:
 # на NIM (брокерский счёт остатка не держит) и на интерчейндже (оборот основного
 # продукта ноль, а прирост оборота у растранзачивания есть — цена 7,7 раза).

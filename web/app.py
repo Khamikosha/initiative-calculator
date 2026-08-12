@@ -318,6 +318,13 @@ def config_of(init):
         else:
             merged = dict(base[sec]); merged.update(cfg.get(sec) or {})
             cfg[sec] = merged
+    # Лечим конфиг на чтении. Посегментный ключ мог попасть на уровень раздела —
+    # из старой записи, из бэкапа, из правки руками. Движок его отвергает, и человек
+    # упирается в «неизвестный ключ» на КАЖДОМ шаге, не понимая, откуда он взялся
+    # и что с ним делать: поля такого в форме нет, убрать его неоткуда.
+    for sec, key in params.SEGMENT_ONLY:
+        if isinstance(cfg.get(sec), dict):
+            cfg[sec].pop(key, None)
     cfg["meta"]["name"] = init["name"]
     cfg["meta"]["type"] = init["type"]
     cfg["meta"]["product"] = init["product"]
