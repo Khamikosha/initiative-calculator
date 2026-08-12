@@ -216,3 +216,38 @@ check("Рублёвый кейс по-прежнему подписан рубл
 check("Показано, чего в цифре нет — открытые вопросы и неучтённое из брифа",
       "Чего в этой цифре нет" in r.text and "Открытые вопросы" in r.text,
       "у этой инициативы бриф заполнен на шаге 2а")
+
+
+# ------------------------------- Чего не будет в выгрузке (BACKLOG 18)
+# Книга собиралась без ошибок и молча теряла блоки эффекта: на живом кейсе
+# youth_card_launch_2026 это 50,2 млн ₽ растранзачивания. Человек нёс на комитет
+# файл, который не сходится с экраном, и узнавал об этом там.
+_bl = calc.book_blind_spots(
+    json.loads((ROOT / "cases" / "youth_card_launch_2026.json").read_text("utf-8")),
+    calc.analyze(calc.prepare(json.loads(
+        (ROOT / "cases" / "youth_card_launch_2026.json").read_text("utf-8"))))["pl"])
+check("Слепые зоны книги считает движок, а не три копии списка",
+      [b["key"] for b in _bl] == ["base_activation"],
+      "список читают книга, веб и сверка — копии разошлись бы на первом новом блоке")
+check("И сумма, которую книга потеряет, названа",
+      _bl[0]["margin"] and _bl[0]["margin"] > 50_000_000,
+      f'{_bl[0]["margin"]:,} ₽')
+check("У кейса без таких блоков слепых зон нет",
+      calc.book_blind_spots(json.loads(
+          (ROOT / "cases" / "comms_push_base.json").read_text("utf-8"))) == [],
+      "предупреждение не должно висеть на каждом расчёте")
+
+_bi = new_initiative("Слепая зона", type="comms", product="card")
+client.post(f"/initiative/{_bi}/assumptions", data={
+    "costs.campaign_months": "6", "ch.0.name": "Пуши", "ch.0.kind": "internal",
+    "ch.0.frk_tier": "4", "ch.0.reach_abs": "1000000",
+    "ch.0.response_rate": "0.02", "ch.0.cr_to_app": "0.1",
+    "has_companion": "1", "companion.name": "Копилка",
+    "companion.attach_rate": "0.3", "companion.funded_rate": "0.7",
+    "companion.avg_balance": "12000", "companion.nim_annual": "0.06",
+    "action": "save"}, follow_redirects=False)
+_br = client.post(f"/initiative/{_bi}/calculate", follow_redirects=False)
+_bhtml = client.get(_br.headers["location"]).text
+check("Экран результата предупреждает ДО выгрузки, а не после",
+      "В выгрузке Excel будет не всё" in _bhtml and "спутник" in _bhtml.lower(),
+      "сказать надо до того, как файл уйдёт коллеге")

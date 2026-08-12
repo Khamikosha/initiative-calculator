@@ -13,6 +13,21 @@
   </div>
 </div>
 
+{% if blind %}
+<div class="callout warn">
+  <b>В выгрузке Excel будет не всё.</b> Книга считает ядро модели — воронку,
+  юнит-экономику, сценарии, вердикт. Эти блоки она не моделирует:
+  <ul>
+    {% for b in blind %}
+    <li>{{ b.label }}{% if b.margin %} — здесь даёт {{ b.margin | mln(CUR) }}
+      валовой маржи, в книге будет ноль{% endif %}</li>
+    {% endfor %}
+  </ul>
+  Книга скажет об этом и сама, на листе «Итог». Для решения берите цифру с этого экрана,
+  книгу — чтобы крутить допущения ядра.
+</div>
+{% endif %}
+
 <div class="verdict {{ 'bad' if 'NO-GO' in v.recommendation else 'warn' if c.downgraded or 'контролем' in v.recommendation else 'good' }}">
   <div class="verdict-text">{{ v.recommendation }}</div>
   {% if c.downgraded %}

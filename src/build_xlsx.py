@@ -837,6 +837,43 @@ for k, f_ in enumerate(FLAGS):
     c = it.cell(FLAG_ROW + k, 1, "=" + f_); c.font = Font(name=F, size=10, color="C00000")
     it.merge_cells(start_row=FLAG_ROW + k, start_column=1, end_row=FLAG_ROW + k, end_column=7)
 
+# --------------------------------------------------------------- ЧЕГО В КНИГЕ НЕТ
+# Книга умеет ядро модели — воронку, юнит-экономику, сценарии, вердикт. Блоки эффекта
+# (связанный клиент, спутник, растранзачивание, натуральный эффект, партнёр, план продаж)
+# она не считает. Это было бы полбеды, но раньше она об этом МОЛЧАЛА: файл собирался
+# без ошибок, и человек нёс на комитет цифру, которая расходится с экраном приложения.
+# На живом кейсе разрыв составлял 50,2 млн ₽ — блок растранзачивания, которого в книге нет.
+#
+# Суммы берём из движка: он тут же под рукой и уже посчитал этот конфиг.
+_blind = [(k, lbl) for k, lbl in calc.BOOK_BLIND.items() if CFG.get(k)]
+if _blind:
+    _res = calc.analyze(CFG)
+    _src = _res["pl"].get("margin_sources") or {}
+    it.cell(FLAG_ROW + len(FLAGS), 1, "ЧЕГО В ЭТОЙ КНИГЕ НЕТ").font = H2
+    it.cell(FLAG_ROW + len(FLAGS), 1).fill = FILL_H
+    it.merge_cells(start_row=FLAG_ROW + len(FLAGS), start_column=1,
+                   end_row=FLAG_ROW + len(FLAGS), end_column=7)
+    _r = FLAG_ROW + len(FLAGS) + 1
+    _lost = 0
+    for _k, _lbl in _blind:
+        _sum = _src.get(_k)
+        _lost += _sum or 0
+        _num = calc.nf(_sum) if _sum else None
+        _txt = (f"⚠ {_lbl}: в приложении даёт {_num} ₽ валовой маржи, в этой книге — 0."
+                if _num else
+                f"⚠ {_lbl}: задан в конфиге, но книгой не моделируется.")
+        c = it.cell(_r, 1, _txt); c.font = Font(name=F, size=10, bold=True, color="9C5700")
+        it.merge_cells(start_row=_r, start_column=1, end_row=_r, end_column=7)
+        _r += 1
+    _npv_txt = calc.nf(_res["pl"]["npv"])
+    c = it.cell(_r, 1,
+                f"NPV в приложении: {_npv_txt} ₽. Здесь он отличается на величину этих "
+                f"блоков — книга считает только ядро модели. Для решения берите цифру "
+                f"из приложения, книгу — чтобы крутить допущения ядра.")
+    c.font = Font(name=F, size=10, italic=True, color="9C5700")
+    it.merge_cells(start_row=_r, start_column=1, end_row=_r, end_column=7)
+    FLAGS = FLAGS + [""] * (len(_blind) + 2)     # чтобы RICE уехал ниже блока
+
 rr = FLAG_ROW + len(FLAGS) + 1          # едет вместе со списком флагов, а не прибит к строке 42
 it.cell(rr, 1, "RICE-скор").font = BOLD
 it.cell(rr, 2, f"=Модель!B{MR['rice']}").font = GREEN

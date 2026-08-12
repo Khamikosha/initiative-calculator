@@ -911,6 +911,10 @@ def calculation_page(request: Request, cid: int):
     init = db.get_initiative(con, c["initiative_id"])
     return page(request, "result.html", c=c, res=res, init=init, step="result",
                 history=db.list_calculations(con, c["initiative_id"]),
+                # Чего не будет в выгрузке. Сказать надо ДО того, как файл уйдёт коллеге:
+                # книга собиралась без ошибок и молча теряла блоки эффекта — на живом
+                # кейсе 50,2 млн ₽.
+                blind=calc.book_blind_spots(json.loads(c["config_snapshot"]), res.get("pl")),
                 panel=db.latest_panel(con, c["initiative_id"]))
 
 
