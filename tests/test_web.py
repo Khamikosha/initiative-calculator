@@ -580,6 +580,104 @@ check("И сказано, почему их нет",
 check("NPV при этом на месте",
       "NPV" in _thtml and "Чистый эффект" in _thtml)
 
+# ------------------------------- Сквозная проверка реестра: форма → конфиг → движок
+# У реестра параметров ЧЕТЫРЕ потребителя: схема движка, разбор формы, шаблоны
+# и уже сохранённые конфиги. `_assert_consistent()` знает только про первого.
+# Из-за этого добавление одного поля сломало три пути из четырёх за один день:
+# поле утекло на общий уровень, конфиг перестал проходить проверку, а сохранённая
+# инициатива стала неоткрываемой.
+#
+# Этот тест проходит ВЕСЬ путь для КАЖДОГО параметра разом: поле есть в форме,
+# введённое значение доезжает до конфига, конфиг принимается движком. Точечные
+# проверки по отдельным формам такого не ловят — они про те формы, которые правили.
+_ri = int(client.post("/initiative/new", data={
+    "name": "Сквозная", "type": "product_launch", "product": "card"},
+    follow_redirects=False).headers["location"].split("/")[2])
+client.post(f"/initiative/{_ri}/segments",
+            data={"segments": ["youth"]}, follow_redirects=False)
+_rpage = client.get(f"/initiative/{_ri}/assumptions").text
+_spage_all = client.get(f"/initiative/{_ri}/segments").text
+
+_FROM_INITIATIVE = {"name", "type", "product"}
+
+
+def _probe_value(p):
+    """Значение внутри допустимого диапазона — иначе провалится валидация, а не путь."""
+    if p.fmt == "text":
+        return None
+    lo, hi = p.rng or (0, 1)
+    if p.fmt in ("pct", "pct2"):
+        return 0.11
+    if p.fmt == "int":
+        return int(max(lo, min(hi, 7)))
+    return max(lo, min(hi, 3.0)) if hi <= 10 else max(lo, min(hi, 1234.0))
+
+
+_missing_field, _lost_value, _out = [], [], {}
+for _sec, _, _ps in params.SECTIONS:
+    for _p in _ps:
+        if _sec == "meta" and _p.key in _FROM_INITIATIVE:
+            continue
+        if (_sec, _p.key) in params.SEGMENT_ONLY:
+            # общего значения не имеет: место такому полю на шаге «Сегменты»
+            if f'name="seg.youth.{_p.key}"' not in _spage_all:
+                _missing_field.append(f"seg.{_p.key}")
+            if f'name="{_sec}.{_p.key}"' in _rpage:
+                _lost_value.append(f"{_sec}.{_p.key} — посегментный ключ на общем уровне")
+            continue
+        # Параметр обязан быть заполнимым ХОТЬ ГДЕ-ТО: часть посегментных полей
+        # намеренно живёт на шаге «Сегменты», а из общей формы скрыта, чтобы одно
+        # и то же число не задавалось в двух местах.
+        _on_assumptions = f'name="{_sec}.{_p.key}"' in _rpage
+        _on_segments = f'name="seg.youth.{_p.key}"' in _spage_all
+        if not (_on_assumptions or _on_segments):
+            _missing_field.append(f"{_sec}.{_p.key}")
+            continue
+        if not _on_assumptions:
+            continue        # задаётся посегментно, общего значения в этой форме нет
+        _v = _probe_value(_p)
+        if _v is not None:
+            _out[f"{_sec}.{_p.key}"] = str(_v)
+
+check("Каждый параметр реестра есть в форме — иначе задать его нечем",
+      not _missing_field, "нет полей: " + ", ".join(_missing_field[:6]))
+
+_out.update({"costs.campaign_months": "6", "ch.0.name": "К", "ch.0.kind": "internal",
+             "ch.0.frk_tier": "4", "ch.0.reach_abs": "1000000",
+             "ch.0.response_rate": "0.02", "ch.0.cr_to_app": "0.1", "action": "save"})
+_rr = client.post(f"/initiative/{_ri}/assumptions", data=_out, follow_redirects=False)
+check("Конфиг из всех полей реестра принимается движком",
+      "error=" not in _rr.headers.get("location", ""),
+      unquote(_rr.headers.get("location", ""))[:150])
+
+_rcfg = json.loads(_db.get_initiative(_db.connect(), _ri)["config_json"])
+for _field, _val in _out.items():
+    if _field.startswith(("ch.", "costs.campaign")) or _field == "action":
+        continue
+    _sec, _key = _field.split(".", 1)
+    _got = (_rcfg.get(_sec) or {}).get(_key)
+    if _got is None or abs(float(_got) - float(_val)) > 1e-6:
+        _lost_value.append(f"{_field}: отправили {_val}, в конфиге {_got}")
+check("Введённое значение доезжает до конфига по каждому параметру",
+      not _lost_value, "; ".join(_lost_value[:4]))
+check("И расчёт по такому конфигу проходит",
+      "calculation" in client.post(f"/initiative/{_ri}/calculate",
+                                   follow_redirects=False).headers.get("location", ""))
+
+# Разбор формы обязан отбрасывать посегментный ключ, ЧТО БЫ НИ ПРИШЛО. Проверка
+# «поля нет в шаблоне» сюда не годится: шаблон один раз уже отрендерил его случайно,
+# и защитой оказался только разбор. Поэтому шлём ключ намеренно.
+_forced = dict(_out)
+for _sec, _key in params.SEGMENT_ONLY:
+    _forced[f"{_sec}.{_key}"] = "250000"
+_fr = client.post(f"/initiative/{_ri}/assumptions", data=_forced, follow_redirects=False)
+_fcfg = json.loads(_db.get_initiative(_db.connect(), _ri)["config_json"])
+check("Посегментный ключ не попадает в раздел, даже если форма его прислала",
+      all(_key not in (_fcfg.get(_sec) or {}) for _sec, _key in params.SEGMENT_ONLY) and
+      "error=" not in _fr.headers.get("location", ""),
+      "именно так конфиг стал неоткрываемым: движок отвергал его на каждом шаге")
+
+
 def _safe_validate(cfg):
     try:
         calc.validate_config(cfg); return True

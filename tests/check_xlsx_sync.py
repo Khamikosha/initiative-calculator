@@ -175,6 +175,16 @@ for mk in MARKERS:
     if in_eng != in_xl:
         mismatch.append((mk, in_eng, in_xl))
 
+# Список маркеров вёлся руками, и это ручной шаг, охраняющий автоматическую проверку.
+# Я забыл внести новый флаг ДВАЖДЫ подряд (deadweight, ROMI): флаг был и в движке,
+# и в книге, а сверка его не смотрела — то есть расхождение осталось бы невидимым.
+#
+# Автоматически вывести маркер из текста нельзя: флаги написаны по-разному, у части
+# нет заглавного зачина. Зато можно потребовать ОБРАТНОЕ — чтобы каждый выданный флаг
+# был кем-то из маркеров покрыт. Тогда новый флаг ломает сверку сразу, и забыть нельзя.
+uncovered_eng = [f for f in eng_flags if not any(mk in f for mk in MARKERS)]
+uncovered_xl = [f for f in xl_flags if not any(mk in f for mk in MARKERS)]
+
 # Индекс уверенности сверяем ЧИСЛОМ, а не только через булев порог «понижен / нет».
 # Пока сравнивался один булев флаг, расхождение 0,632 против 0,640 было невидимым:
 # обе цифры выше 0,6, решение совпадало, а знаменатель у книги был другой.
@@ -203,6 +213,13 @@ print(f"\nФлаги: движок {len(eng_flags)}, книга {len(xl_flags)} 
       f"{'совпадают' if not mismatch else 'РАСХОЖДЕНИЕ'}")
 for mk, in_eng, in_xl in mismatch:
     print(f"  ✗ «{mk}»: движок {'есть' if in_eng else 'нет'}, книга {'есть' if in_xl else 'нет'}")
+for f in uncovered_eng:
+    print(f"  ✗ ФЛАГ ДВИЖКА ВНЕ СВЕРКИ: «{f[:70]}…»\n"
+          f"    Он не покрыт ни одним маркером, значит книга с ним не сверяется вовсе.\n"
+          f"    Добавьте отличительный кусок текста в MARKERS — и формулу в книгу.")
+for f in uncovered_xl:
+    print(f"  ✗ ФЛАГ КНИГИ ВНЕ СВЕРКИ: «{f[:70]}…»\n"
+          f"    Книга выдаёт предупреждение, о котором сверка не знает.")
 print(f"Индекс уверенности: движок {_idx_eng}, книга "
       f"{round(float(_idx_book), 4) if _idx_book not in (None, '') else '—'} — "
       f"{'совпадают' if idx_ok else 'РАСХОЖДЕНИЕ'}")
@@ -214,7 +231,8 @@ for title, want, got, good in eff_rows:
 
 bad = (sum(1 for r in rows if not r[-1]) + len(mismatch)
        + (0 if verdict_ok else 1) + (0 if idx_ok else 1)
-       + sum(1 for r in eff_rows if not r[-1]))
+       + sum(1 for r in eff_rows if not r[-1])
+       + len(uncovered_eng) + len(uncovered_xl))
 if bad:
     print(f"\n✗ Расхождений: {bad}. Excel и движок считают или говорят по-разному — "
           "инвариант проекта нарушен.")
