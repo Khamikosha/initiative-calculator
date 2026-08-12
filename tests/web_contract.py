@@ -316,3 +316,45 @@ _z56["audience"] = {**_z56["audience"], "target_size": 0, "segments": []}
 check("И нулевая ЦА при заданных каналах — тоже",
       any("размер ЦА = 0" in x for x in calc.analyze(calc.prepare(_z56))["validation"]),
       "приглушать надо ложное, а не всё подряд")
+
+
+# ------------------------------- Путь для инициатив без привлечения (BACKLOG 2)
+# Инструмент был построен вокруг медиаворонки: список типов — карта работ маркетинга,
+# первый блок формы — таблица каналов, минимум для ответа — медиаплан. Продуктовый лид
+# с фичей выбирал ближайший чужой тип и получал чужие поля и чужие подсказки.
+_ft = new_initiative("Фича в продукте", type="feature", product="card")
+_fh = client.get(f"/initiative/{_ft}/assumptions").text
+_mh = client.get(f"/initiative/{new_initiative('Медийная', type='frk3')}/assumptions").text
+
+check("У инициативы без привлечения первый блок — своя база, а не каналы",
+      _fh.split('<section class="card">')[1].split("</h3>")[0].count("Растранзачивание") == 1 and
+      _mh.split('<section class="card">')[1].split("</h3>")[0].count("Каналы") == 1,
+      "человек с фичей упирался в таблицу каналов, которая ему не нужна")
+check("И минимум для ответа назван свой",
+      "обязателен блок «Растранзачивание своей базы»" in _fh and
+      "обязательны только каналы" in _mh)
+check("Каналы у такого типа помечены необязательными, а не спрятаны",
+      "Каналы — необязательны для этого типа" in _fh,
+      "спрятать их нельзя: фича может сопровождаться коммуникацией")
+
+# Подсказки блока были написаны под рассылку по спящим и на фиче звучали бессмыслицей
+_fcfg = json.loads(json.dumps(params.defaults()))
+_fcfg["meta"].update(name="Ф", type="feature", horizon_months=24)
+_fcfg["channels"] = []
+_fcfg["audience"] = {"target_size": 0}
+_fcfg["base_activation"] = {
+    "name": "Раздел «Цели»", "eligible_clients": 4_000_000, "reach_share": 0.35,
+    "technically_reachable": 0.9, "uplift_rate": 0.18, "attribution_share": 1.0,
+    "turnover_before": 0, "turnover_after": 0, "balance_before": 0,
+    "balance_after": 25000, "decay_months": 18}
+_fres = calc.analyze(calc.prepare(_fcfg))
+_ftexts = _fres["flags"] + _fres["validation"]
+check("Без каналов не советуют сверяться с прайсом канала",
+      not any("прайсом канала" in x for x in _ftexts),
+      "раздел в приложении не покупают по прайсу платных смс")
+check("Но соотношение «затронутых на результат» остаётся",
+      any("ЦЕНА КОНТАКТА" in x for x in _ftexts),
+      "число полезно и без канала — оно показывает, насколько узко срабатывает механика")
+check("База называется просто базой, а не спящей",
+      any("БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ" in x for x in _ftexts) and
+      not any("СПЯЩАЯ БАЗА" in x for x in _ftexts))

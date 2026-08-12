@@ -662,7 +662,7 @@ check("Потолок по частям базы применяется и к р
           - 1_000_000 * 0.7 * (0.4 * 0.01 + 0.6 * 0.002)) < 1,
       f'{_r_pt["pl"]["base_activation"]["activated_from_stock"]:,.0f}')
 check("Однородная спящая база помечается",
-      any("СПЯЩАЯ БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ" in m for m in _r_sf["validation"]))
+      any("БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ" in m for m in _r_sf["validation"]))
 check("Доли частей базы обязаны давать единицу и здесь тоже",
       _config_error(dict(_pt, base_activation=dict(
           _pt["base_activation"],

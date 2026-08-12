@@ -13,7 +13,12 @@ check("Каждый параметр реестра имеет подпись и
 # ---------------------------------------------------------------- 1б. Разбивка по типам
 check("Все типы инициатив описаны в реестре",
       set(params.INITIATIVE_TYPES) == {"comms", "frk4", "frk3", "frk2", "frk1",
-                                       "product_launch", "pilot"})
+                                       "product_launch", "pilot",
+                                       "feature", "product_change"})
+check("Типы без привлечения объявлены явно, а не выводятся из пустых каналов",
+      {k for k, v in params.INITIATIVE_TYPES.items() if v.get("no_acquisition")} ==
+      {"feature", "product_change"},
+      "фича и доработка ничего не привлекают — им нужен другой набор полей")
 check("Органика и halo работают только там, где есть охватные каналы",
       all(not p.works_for("comms") and not p.works_for("frk4") and p.works_for("frk1")
           for p in params.ALL
