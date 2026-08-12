@@ -580,6 +580,48 @@ check("И сказано, почему их нет",
 check("NPV при этом на месте",
       "NPV" in _thtml and "Чистый эффект" in _thtml)
 
+# Ставка, обнулённая взвешиванием (BACKLOG 58). Найдено дважды на живых постановках:
+# на NIM (брокерский счёт остатка не держит) и на интерчейндже (оборот основного
+# продукта ноль, а прирост оборота у растранзачивания есть — цена 7,7 раза).
+def _rate_case(turnover, interchange=0.015, balance=15000, nim=0.01):
+    cfg = json.loads(json.dumps(params.defaults()))
+    cfg["meta"].update(name="Ставки", type="product_launch", product="broker",
+                       horizon_months=36)
+    cfg["audience"] = {"segments": [{"id": "teens", "target_size": 6_000_000,
+                       "reachable_share": 1.0, "baseline_organic_apps_m": 0}]}
+    cfg["unit_economics"].update(mode="build_up", avg_balance=balance, nim_annual=nim,
+        monthly_turnover=turnover, interchange_rate=interchange, cashback_rate=0,
+        fee_income_m=15, servicing_cost_m=5, cor_annual=0, monthly_churn=0.03,
+        ramp_months=3)
+    cfg["base_activation"] = {"name": "Рост активности", "eligible_clients": 100_000,
+        "technically_reachable": 1.0, "reach_share": 1.0, "uplift_rate": 0.05,
+        "attribution_share": 1.0, "turnover_before": 0, "turnover_after": 3000,
+        "balance_before": 0, "balance_after": 8000, "decay_months": 24}
+    cfg["channels"] = [{"name": "П", "kind": "internal", "frk_tier": 4,
+        "reach_abs": 3_000_000, "response_rate": 0.08, "cr_to_app": 0.25}]
+    cfg["costs"].update(campaign_months=6, production=1_500_000)
+    return calc.analyze(calc.prepare(cfg))
+
+
+_z = _rate_case(turnover=0)
+_nz = _rate_case(turnover=8000)
+check("Ставка, обнулённая взвешиванием, названа вслух",
+      any("ОБНУЛЕНА ВЗВЕШИВАНИЕМ" in v and "interchange_rate" in v
+          for v in _z["validation"]),
+      "заданная ставка молча превращалась в ноль, и часть эффекта исчезала")
+check("Сказано, какое поле заполнить, чтобы ставка выжила",
+      any("monthly_turnover" in v for v in _z["validation"] if "ОБНУЛЕНА" in v))
+check("Когда база ненулевая, предупреждения нет",
+      not any("ОБНУЛЕНА ВЗВЕШИВАНИЕМ" in v for v in _nz["validation"]))
+check("И цена вопроса именно та, о которой предупреждаем",
+      _nz["pl"]["margin_sources"]["base_activation"] >
+      _z["pl"]["margin_sources"]["base_activation"] * 5,
+      f'{_z["pl"]["margin_sources"]["base_activation"]:,} против '
+      f'{_nz["pl"]["margin_sources"]["base_activation"]:,} ₽')
+check("Ставка, которую не задавали, предупреждения не вызывает",
+      not any("cashback_rate" in v for v in _z["validation"] if "ОБНУЛЕНА" in v),
+      "иначе предупреждение сыпалось бы на каждом конфиге с нулевым кэшбэком")
+
 # Регрессия: посегментный ключ утёк на уровень раздела и движок отверг конфиг.
 # Форма «Допущения» рисует поля по общему списку разделов, и новый посегментный
 # параметр туда попал — человек получал «неизвестный ключ audience.product_clients»
