@@ -142,8 +142,11 @@ def form_to_config(form, cfg):
     for sid in chosen:
         s = existing.get(sid) or {}
         s["id"] = sid
+        # existing_clients в форме был, а здесь его не было: поле рисовалось, введённое
+        # молча отбрасывалось, и человек видел в расчёте число из реестра вместо своего.
+        # Поле, которое показано и не читается, хуже отсутствующего.
         for key, default in ([(p.key, p.default) for p in params.SEGMENT_SCOPED]
-                             + [("reachable_share", None)]):
+                             + [("reachable_share", None), ("existing_clients", None)]):
             field = f"seg.{sid}.{key}"
             if field not in form:
                 continue                       # поля нет в этой форме — значение не трогаем

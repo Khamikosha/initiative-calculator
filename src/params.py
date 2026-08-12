@@ -463,6 +463,13 @@ AUDIENCE = [
       default=1_000_000, key_assumption=True, segment_scoped=True,
       note="Знаменатель охвата и частоты. Не вся РФ, а именно ЦА продукта. "
            "При выборе сегментов задаётся по каждому отдельно."),
+    P("product_clients", "audience", "Клиентов с этим продуктом", unit="чел", fmt="int",
+      default=0, grade="A", segment_scoped=True,
+      note="Сколько человек в сегменте УЖЕ пользуются этим продуктом. Отсюда считается "
+           "проникновение продукта — сколько рынка ещё не занято. Не путать с числом "
+           "клиентов банка: их в подростках 4,5 млн, а брокерских счетов 250 тыс, "
+           "и это разные ответы на вопрос «есть ли кого привлекать». Ноль — считать "
+           "по клиентам банка, как раньше."),
     P("baseline_organic_apps_m", "audience", "Органические заявки в месяц", unit="шт/мес",
       fmt="int", default=5_000, grade="A", key_assumption=True, segment_scoped=True,
       types=BRAND_TYPES,
@@ -1125,11 +1132,17 @@ def nested_title(section):
     return NESTED_SECTIONS.get(section, ("", {}))[0]
 
 
+# Параметры, которые существуют ТОЛЬКО внутри сегмента: общего значения у них не бывает.
+# Движок такой ключ на уровне раздела отвергает — и правильно делает, поэтому и заготовка
+# конфига его туда не кладёт.
+SEGMENT_ONLY = {("audience", "product_clients")}
+
+
 def defaults():
     """Конфиг из одних дефолтов — заготовка для новой инициативы."""
     out = {}
     for sec, _, ps in SECTIONS:
-        out[sec] = {p.key: p.default for p in ps}
+        out[sec] = {p.key: p.default for p in ps if (sec, p.key) not in SEGMENT_ONLY}
     out["channels"] = []
     return out
 
@@ -1152,7 +1165,11 @@ def _assert_consistent():
             "  Новый вложенный блок обязан быть описан в реестре, иначе о нём "
             "не узнают ни форма, ни книга, ни навык.")
 
-    reg = {(p.section, p.key) for p in ALL}
+    # `product_clients` задаётся ТОЛЬКО по сегменту: общего значения у него не бывает,
+    # поэтому в calc.SCHEMA раздела `audience` его нет, а в SEGMENT_KEYS есть.
+    # Из сверки со схемой исключается явно — иначе пришлось бы заводить в схеме ключ,
+    # который движок никогда не прочитает, и следующий человек долго бы гадал зачем.
+    reg = {(p.section, p.key) for p in ALL} - SEGMENT_ONLY
     eng = {(sec, k) for sec, keys in calc.SCHEMA.items() if keys for k in keys
            if not (sec == "audience" and k == "segments")}
     unknown_nested = set(NESTED_KEYS) - eng
@@ -1175,7 +1192,10 @@ def _assert_consistent():
             f"  только в реестре: {sorted(ch_reg - ch_eng)}\n"
             f"  только в движке:  {sorted(ch_eng - ch_reg)}")
     # id, reachable_share и existing_clients живут только внутри сегмента: в разделах
-    # конфига их нет, поэтому в SECTIONS они не попадают, а в SEGMENT_KEYS есть
+    # конфига их нет, поэтому в SECTIONS они не попадают, а в SEGMENT_KEYS есть.
+    # product_clients — посегментный и задаётся человеком, поэтому он В SECTIONS есть,
+    # но раздела `audience.product_clients` в схеме нет: число всегда про конкретный
+    # сегмент, общего значения у него не бывает.
     scoped = {p.key for p in SEGMENT_SCOPED} | {"id", "reachable_share", "existing_clients"}
     if scoped != set(calc.SEGMENT_KEYS):
         raise RuntimeError(

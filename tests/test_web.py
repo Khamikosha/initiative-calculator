@@ -580,6 +580,68 @@ check("И сказано, почему их нет",
 check("NPV при этом на месте",
       "NPV" in _thtml and "Чистый эффект" in _thtml)
 
+# Проникновение продукта против проникновения банка (BACKLOG 59).
+# На выводе продукта модель говорила «75% рынка уже наши, привлекать некого»,
+# хотя брокерских счетов у подростков 250 тыс на 6 млн — то есть 4%.
+_pi = int(client.post("/initiative/new", data={
+    "name": "Проникновение", "type": "product_launch", "product": "broker"},
+    follow_redirects=False).headers["location"].split("/")[2])
+_spage = client.get(f"/initiative/{_pi}/segments").text
+check("Поле «клиентов с этим продуктом» есть в форме сегментов",
+      'name="seg.teens.product_clients"' in _spage,
+      "без него проникновение продукта задать нечем")
+
+client.post(f"/initiative/{_pi}/segments", data={
+    "segments": ["teens"], "seg.teens.target_size": "6000000",
+    "seg.teens.product_clients": "250000",
+    "seg.teens.existing_clients": "4495500",
+    "seg.teens.baseline_organic_apps_m": "0"}, follow_redirects=False)
+_pcfg = json.loads(_db.get_initiative(_db.connect(), _pi)["config_json"])
+_pseg = _pcfg["audience"]["segments"][0]
+check("Клиенты продукта доезжают до конфига",
+      _pseg.get("product_clients") == 250000.0)
+check("Клиенты банка тоже — раньше поле рисовалось, а разбор его игнорировал",
+      _pseg.get("existing_clients") == 4495500.0,
+      "поле, которое показано и не читается, хуже отсутствующего")
+
+client.post(f"/initiative/{_pi}/assumptions", data={
+    "costs.campaign_months": "6", "ch.0.name": "Пуши", "ch.0.kind": "internal",
+    "ch.0.frk_tier": "4", "ch.0.reach_abs": "3000000",
+    "ch.0.response_rate": "0.02", "ch.0.cr_to_app": "0.25", "action": "save"},
+    follow_redirects=False)
+_pr = client.post(f"/initiative/{_pi}/calculate", follow_redirects=False)
+_pres = json.loads(_db.get_calculation(
+    _db.connect(), int(_pr.headers["location"].split("/")[-1]))["result_json"])
+_pline = next((v for v in _pres["validation"] if "ПРОНИКНОВЕНИЕ" in v), "")
+check("Считается проникновение ПРОДУКТА, а не банка",
+      "ПРОНИКНОВЕНИЕ ПРОДУКТА" in _pline and "4.2%" in _pline,
+      _pline[:90])
+check("И вывод обратный прежнему: место для привлечения есть",
+      "Место для привлечения есть" in _pline,
+      "раньше говорилось «привлекать некого» при продукте у 4% рынка")
+check("Насыщенность банка при этом названа отдельно, а не смешана",
+      "клиентами банка охвачено" in _pline)
+
+# без числа клиентов продукта — старое поведение, но с подсказкой, чего не хватает
+_pi2 = int(client.post("/initiative/new", data={
+    "name": "Без продукта", "type": "product_launch", "product": "broker"},
+    follow_redirects=False).headers["location"].split("/")[2])
+client.post(f"/initiative/{_pi2}/segments", data={
+    "segments": ["teens"], "seg.teens.baseline_organic_apps_m": "0"},
+    follow_redirects=False)
+client.post(f"/initiative/{_pi2}/assumptions", data={
+    "costs.campaign_months": "6", "ch.0.name": "Пуши", "ch.0.kind": "internal",
+    "ch.0.frk_tier": "4", "ch.0.reach_abs": "3000000",
+    "ch.0.response_rate": "0.02", "ch.0.cr_to_app": "0.25", "action": "save"},
+    follow_redirects=False)
+_pr2 = client.post(f"/initiative/{_pi2}/calculate", follow_redirects=False)
+_pres2 = json.loads(_db.get_calculation(
+    _db.connect(), int(_pr2.headers["location"].split("/")[-1]))["result_json"])
+_pline2 = next((v for v in _pres2["validation"] if "ПРОНИКНОВЕНИЕ" in v), "")
+check("Без числа клиентов продукта сказано, что это проникновение БАНКА",
+      "ПРОНИКНОВЕНИЕ БАНКА" in _pline2 and "ЭТО НЕ ПРОНИКНОВЕНИЕ ПРОДУКТА" in _pline2,
+      "и подсказано, какое поле заполнить")
+
 # Каталог продуктов делится по единственному признаку, который меняет работу человека:
 # есть готовая ценность клиента или экономику придётся собирать снизу вверх.
 check("Список продуктов разделён на две группы",

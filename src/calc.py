@@ -126,7 +126,8 @@ def resolve_segments(cfg):
                "cannibalization": g(s, "cannibalization", g(fun, "cannibalization")),
                "deadweight": g(s, "deadweight", g(fun, "deadweight")),
                "acq_cost_per_client": g(s, "acq_cost_per_client", g(kt, "acq_cost_per_client")),
-               "existing_clients": g(s, "existing_clients")}
+               "existing_clients": g(s, "existing_clients"),
+               "product_clients": g(s, "product_clients")}
         for k in ("avg_balance", "nim_annual", "monthly_turnover", "interchange_rate", "fee_income_m",
                   "cashback_rate", "servicing_cost_m", "cor_annual", "ramp_months", "monthly_churn",
                   "value_per_client", "operating_income_annual"):
@@ -186,22 +187,48 @@ def resolve_segments(cfg):
         ue[k] = _wavg([(w, r[k]) for w, r in base])
     kt["acq_cost_per_client"] = _wavg([(w, r["acq_cost_per_client"]) for w, r in cl_w])
 
-    # Проникновение: сколько рынка сегмента уже клиенты банка. При высоком проникновении
-    # «привлечение» на деле оказывается кросс-продажей: новых людей взять неоткуда.
+    # Проникновение считается ДВУМЯ разными числами, и путать их дорого.
+    #
+    #   клиенты банка в сегменте  → отвечает на «есть ли кому продавать вообще»;
+    #   клиенты ЭТОГО продукта    → отвечает на «остались ли те, кому продукт ещё не продан».
+    #
+    # Для вывода нового продукта верно второе. Раньше считалось только первое, и на
+    # подростковой Инвесткопилке модель говорила «75% рынка уже наши, привлекать некого»
+    # при 250 тыс брокерских счетов на 6 млн подростков — то есть при проникновении
+    # продукта 4%. Вывод получался прямо обратный действительности.
     for r in rows:
         r["penetration"] = (r["existing_clients"] / r["target_size"]
                             if r["existing_clients"] and r["target_size"] else None)
+        r["product_penetration"] = (r["product_clients"] / r["target_size"]
+                                    if r["product_clients"] and r["target_size"] else None)
     for r in live:
-        if r["penetration"] and r["penetration"] >= 0.5:
+        pp = r["product_penetration"]
+        if pp is not None:
+            free = r["target_size"] - r["product_clients"]
+            if pp >= 0.5:
+                notes.append(
+                    f"ПРОНИКНОВЕНИЕ ПРОДУКТА: в сегменте «{r['name']}» продукт уже "
+                    f"у {pp:.0%} рынка. Не занято {nf(free)} чел из {nf(r['target_size'])}. "
+                    "Модель считает охват против ВСЕЙ ЦА, поэтому если инициатива про "
+                    "привлечение НОВЫХ, инкремент завышен: возьмите незанятую часть.")
+            else:
+                notes.append(
+                    f"ПРОНИКНОВЕНИЕ ПРОДУКТА: в сегменте «{r['name']}» продукт есть "
+                    f"у {pp:.1%} рынка — не занято {nf(free)} чел. Место для привлечения "
+                    "есть. Насыщенность банка в сегменте это отдельный вопрос: "
+                    + (f"клиентами банка охвачено {r['penetration']:.0%}."
+                       if r["penetration"] else "число клиентов банка не задано."))
+        elif r["penetration"] and r["penetration"] >= 0.5:
             free = r["target_size"] - r["existing_clients"]
             notes.append(
-                f"ПРОНИКНОВЕНИЕ: в сегменте «{r['name']}» уже {r['penetration']:.0%} рынка — "
-                f"клиенты банка. Незанятого рынка остаётся {nf(free)} чел из "
-                f"{nf(r['target_size'])}. Модель считает охват против ВСЕЙ ЦА, поэтому если "
-                "инициатива про привлечение НОВЫХ клиентов, инкремент завышен: возьмите "
-                "target_size равным незанятому рынку. Если инициатива про кросс-продажу "
-                "своей базе — всё верно, но растёт ОД, а не АКБ."
-                )
+                f"ПРОНИКНОВЕНИЕ БАНКА: в сегменте «{r['name']}» уже {r['penetration']:.0%} "
+                f"рынка — клиенты банка. Незанятого рынка остаётся {nf(free)} чел из "
+                f"{nf(r['target_size'])}. ЭТО НЕ ПРОНИКНОВЕНИЕ ПРОДУКТА: если инициатива "
+                "выводит новый продукт, задайте «Клиентов с этим продуктом» — тогда "
+                "модель посчитает то, что вам нужно. Пока считает так: модель берёт охват "
+                "против ВСЕЙ ЦА, и если инициатива про привлечение НОВЫХ клиентов, "
+                "инкремент завышен. Если про кросс-продажу своей базе — всё верно, "
+                "но растёт ОД, а не АКБ.")
 
     total = sum(r["_clients"] for r in live)
     for r in rows:
@@ -271,7 +298,7 @@ CHANNEL_KEYS = {"name": None, "kind": None, "frk_tier": (1, 4), "budget": _MONEY
                 "brand_uplift": (0.0, 5.0), "reach_abs": (0.0, 2e9), "impressions": (0.0, 1e13),
                 "effective_freq_target": (0.1, 50.0)}
 SEGMENT_KEYS = {"id": None, "target_size": (0.0, 2e9), "reachable_share": _RATE,
-                "existing_clients": (0.0, 2e9),
+                "existing_clients": (0.0, 2e9), "product_clients": (0.0, 2e9),
                 "baseline_organic_apps_m": (0.0, 1e9), "acq_cost_per_client": (0.0, 1e7),
                 **FUNNEL_KEYS, **UE_KEYS}
 CHANNEL_KINDS = ("internal", "perform", "brand")

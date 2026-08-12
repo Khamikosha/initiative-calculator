@@ -71,9 +71,19 @@
                      value="{{ chosen[sid].existing_clients if on and chosen[sid].existing_clients is defined else '' }}"
                      placeholder="{{ k.existing_clients | num }} — из реестра">
             </label>
+            <label class="field">
+              <span>Клиентов с этим продуктом, чел</span>
+              <input name="seg.{{ sid }}.product_clients" inputmode="numeric"
+                     value="{{ chosen[sid].product_clients if on and chosen[sid].product_clients is defined else '' }}"
+                     placeholder="если знаете — будет считаться проникновение продукта">
+            </label>
           </div>
           <small class="muted">Рынок уже ограничен возрастами, где продукт доступен,
-            поэтому возрастная отсечка к нему повторно не применяется.</small>
+            поэтому возрастная отсечка к нему повторно не применяется.<br>
+            <b>Клиенты банка и клиенты продукта — разные числа.</b> Подростков-клиентов
+            банка 4,5 млн, а брокерских счетов у них 250 тыс. На вопрос «есть ли кого
+            привлекать» при выводе продукта отвечает второе: без него модель посчитает
+            проникновение 75% и скажет «привлекать некого», хотя продукт есть у 4%.</small>
         </details>
       </div>
       {% endif %}
