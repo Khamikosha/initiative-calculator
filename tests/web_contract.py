@@ -280,3 +280,39 @@ check("Группы видны в самом списке, а не только 
       _npage.count("<optgroup") == 2 and
       all(g in _npage for g, _ in params.PRODUCT_GROUPS),
       "разница объясняется списком, и объяснять её словами уже не нужно")
+
+
+# ------------------------------- Ложные предупреждения (BACKLOG 56)
+# «ОШИБКА ВВОДА: размер ЦА = 0» на инициативе без привлечения, где ноль законен,
+# и «Каннибализация = 0» там, где нового продукта нет. На потоке из ста идей человек
+# приучается пролистывать блок проверки целиком — а там же лежат настоящие находки.
+_n56 = json.loads(json.dumps(params.defaults()))
+_n56["meta"].update(name="Фича", type="comms", horizon_months=24)
+_n56["channels"] = []
+_n56["audience"] = {"target_size": 0}
+_n56["base_activation"] = {
+    "name": "Раздел «Цели»", "eligible_clients": 4_000_000, "reach_share": 0.35,
+    "technically_reachable": 0.9, "uplift_rate": 0.18, "attribution_share": 1.0,
+    "turnover_before": 0, "turnover_after": 0, "balance_before": 0,
+    "balance_after": 25000, "decay_months": 18}
+_r56 = calc.analyze(calc.prepare(_n56))
+_noise = [x for x in _r56["flags"] + _r56["validation"]
+          if "ОШИБКА ВВОДА" in x or "Каннибализация = 0" in x]
+check("У инициативы без привлечения нет ложных «ошибок ввода»",
+      not _noise, "; ".join(n[:50] for n in _noise))
+check("Но сама инициатива при этом считается",
+      _r56["pl"]["npv"] != 0,
+      "молчание не должно означать, что расчёт пустой")
+
+# обратная сторона: там, где привлечение есть, оба предупреждения обязаны остаться
+_c56 = json.loads((ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))
+_c56["funnel"]["cannibalization"] = 0
+for _sg in _c56["audience"]["segments"]:
+    _sg["cannibalization"] = 0
+check("На кампании с привлечением нулевая каннибализация окликается",
+      any("Каннибализация = 0" in x for x in calc.analyze(calc.prepare(_c56))["flags"]))
+_z56 = json.loads((ROOT / "cases" / "youth_card_segments.json").read_text("utf-8"))
+_z56["audience"] = {**_z56["audience"], "target_size": 0, "segments": []}
+check("И нулевая ЦА при заданных каналах — тоже",
+      any("размер ЦА = 0" in x for x in calc.analyze(calc.prepare(_z56))["validation"]),
+      "приглушать надо ложное, а не всё подряд")
