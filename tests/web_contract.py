@@ -358,3 +358,58 @@ check("Но соотношение «затронутых на результа�
 check("База называется просто базой, а не спящей",
       any("БАЗА СЧИТАЕТСЯ ОДНОРОДНОЙ" in x for x in _ftexts) and
       not any("СПЯЩАЯ БАЗА" in x for x in _ftexts))
+
+
+# ------------------------------- Экран результата для инициатив без привлечения
+# Движок считал 226 800 затронутых клиентов и 104 ₽ эффекта на каждого, а на экране
+# были только NPV и отдача: человек видел итог и не видел, из чего он сложился.
+_fi = new_initiative("Раздел «Цели»", type="feature", product="card")
+client.post(f"/initiative/{_fi}/assumptions", data={
+    "costs.campaign_months": "6", "costs.it_dev": "12000000",
+    "base_activation.name": "Раздел «Цели»",
+    "base_activation.eligible_clients": "4000000",
+    "base_activation.technically_reachable": "0.9",
+    "base_activation.reach_share": "0.35", "base_activation.uplift_rate": "0.18",
+    "base_activation.attribution_share": "1",
+    "base_activation.balance_after": "25000", "base_activation.decay_months": "18",
+    "unit_economics.nim_annual": "0.05", "unit_economics.avg_balance": "1000",
+    "action": "save"}, follow_redirects=False)
+_fr = client.post(f"/initiative/{_fi}/calculate", follow_redirects=False)
+_fhtml = client.get(_fr.headers["location"]).text
+_fres = result_of(_fr.headers["location"])
+_fba = _fres["pl"]["base_activation"]
+
+check("Вместо инкрементальных клиентов показаны затронутые",
+      "Затронуто клиентов" in _fhtml and "Инкрементальные клиенты" not in
+      _fhtml.split('<div class="tiles">')[1].split('<section class="card">')[0],
+      "единица эффекта здесь — изменившийся, а не пришедший")
+check("Появился блок «Что происходит с базой»",
+      "Что происходит с базой" in _fhtml)
+_blk = _fhtml.split("Что происходит с базой")[1].split("</section>")[0]
+# разряды форматируются узким неразрывным пробелом; нормализуем все виды пробелов,
+# иначе тест сравнивает то, чего человек не видит
+_flat = re.sub(r"[\u00a0\u2009\u202f\s]+", " ", _blk)
+check("В нём показано число затронутых из расчёта, а не из воздуха",
+      f'{_fba["activated_clients"]:,}'.replace(",", " ") in _flat,
+      f'{_fba["activated_clients"]:,} клиентов')
+check("И эффект на одного клиента в месяц",
+      "Эффект на клиента" in _blk and str(int(_fba["margin_per_client_m"])) in _flat)
+check("Сказано, что затронутые не идут в АКБ и инкремент",
+      "не попадают" in _blk and "дважды" in _blk,
+      "иначе человек сложит их с привлечёнными")
+check("Окупаемость подписана как окупаемость разработки",
+      "Окупаемость разработки" in _fhtml,
+      "медиабюджета здесь нет, и слово без уточнения читается неверно")
+
+# у медийной инициативы этого блока быть не должно
+_mi = new_initiative("Медийная", type="frk3", product="card")
+client.post(f"/initiative/{_mi}/assumptions", data={
+    "costs.campaign_months": "6", "ch.0.name": "Перф", "ch.0.kind": "perform",
+    "ch.0.frk_tier": "4", "ch.0.budget": "10000000", "ch.0.cpm": "250",
+    "ch.0.ctr": "0.008", "ch.0.cr_to_app": "0.06", "action": "save"},
+    follow_redirects=False)
+_mr = client.post(f"/initiative/{_mi}/calculate", follow_redirects=False)
+_mhtml = client.get(_mr.headers["location"]).text
+check("У медийной инициативы блок про базу не появляется",
+      "Что происходит с базой" not in _mhtml and
+      "Инкрементальные клиенты" in _mhtml and "Окупаемость разработки" not in _mhtml)
