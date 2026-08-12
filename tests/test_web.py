@@ -580,6 +580,34 @@ check("И сказано, почему их нет",
 check("NPV при этом на месте",
       "NPV" in _thtml and "Чистый эффект" in _thtml)
 
+# Регрессия: посегментный ключ утёк на уровень раздела и движок отверг конфиг.
+# Форма «Допущения» рисует поля по общему списку разделов, и новый посегментный
+# параметр туда попал — человек получал «неизвестный ключ audience.product_clients»
+# на сохранении, не сделав ничего необычного.
+_rg = int(client.post("/initiative/new", data={
+    "name": "Общий уровень", "type": "product_launch", "product": "broker"},
+    follow_redirects=False).headers["location"].split("/")[2])
+client.post(f"/initiative/{_rg}/segments", data={
+    "segments": ["teens"], "seg.teens.product_clients": "250000",
+    "seg.teens.baseline_organic_apps_m": "0"}, follow_redirects=False)
+_rgpage = client.get(f"/initiative/{_rg}/assumptions").text
+check("Посегментного ключа нет в общей таблице параметров",
+      'name="audience.product_clients"' not in _rgpage,
+      "общего значения у него не бывает, движок такой ключ отвергает")
+_rgr = client.post(f"/initiative/{_rg}/assumptions", data={
+    "costs.campaign_months": "6", "ch.0.name": "Пуши", "ch.0.kind": "internal",
+    "ch.0.frk_tier": "4", "ch.0.reach_abs": "3000000",
+    "ch.0.response_rate": "0.08", "ch.0.cr_to_app": "0.25",
+    "has_companion": "1", "companion.name": "рост активности",
+    "companion.attach_rate": "0.5", "companion.avg_balance": "14000",
+    "action": "save"}, follow_redirects=False)
+check("Допущения со спутником сохраняются без ошибки движка",
+      "error=" not in _rgr.headers.get("location", ""),
+      unquote(_rgr.headers.get("location", ""))[:70])
+check("И считаются",
+      "calculation" in client.post(f"/initiative/{_rg}/calculate",
+                                   follow_redirects=False).headers.get("location", ""))
+
 # Проникновение продукта против проникновения банка (BACKLOG 59).
 # На выводе продукта модель говорила «75% рынка уже наши, привлекать некого»,
 # хотя брокерских счетов у подростков 250 тыс на 6 млн — то есть 4%.

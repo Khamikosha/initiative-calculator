@@ -120,6 +120,11 @@ def form_to_config(form, cfg):
         for p in ps:
             if sec == "meta" and p.key in FROM_INITIATIVE:
                 continue
+            # Посегментные-только ключи на уровне раздела движок отвергает: общего
+            # значения у них не бывает. Форма их всё равно рисует по общему списку,
+            # поэтому отсекать надо здесь, иначе конфиг перестаёт проходить проверку.
+            if (sec, p.key) in params.SEGMENT_ONLY:
+                continue
             field = f"{sec}.{p.key}"
             if field in form:
                 raw = form[field]

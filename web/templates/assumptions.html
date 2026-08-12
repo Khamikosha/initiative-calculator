@@ -359,7 +359,11 @@
   там стоит ненулевое значение, оно остаётся на виду и всё равно считается.</p>
 {% for sec, title, ps in params.SECTIONS %}
   {% if sec not in ('meta', 'confidence', 'costs') %}
-  {% set visible = ps | rejectattr('key', 'in', ('target_size', 'baseline_organic_apps_m') if (sec == 'audience' and seg_ids) else ()) | list %}
+  {# product_clients общего значения не имеет — только по сегменту, задаётся на шаге
+     «Сегменты». В общей таблице ему места нет ни при каких условиях. #}
+  {% set hide = (('target_size', 'baseline_organic_apps_m', 'product_clients')
+                 if (sec == 'audience' and seg_ids) else ('product_clients',)) %}
+  {% set visible = ps | rejectattr('key', 'in', hide) | list %}
   {% set split = params.split_by_type(visible, init.type, cfg) %}
   {% if split[0] or split[1] %}
   <section class="card">
