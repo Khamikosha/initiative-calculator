@@ -151,6 +151,14 @@
     <tr><td>Прирост остатка на клиента</td>
         <td class="r">{{ ba.balance_delta_per_client | money(CUR) }}</td></tr>
     {% endif %}
+    {% if ba.retention_on %}
+    <tr><td><b>Удержание: дополнительные клиенто-месяцы</b></td>
+        <td class="r"><b>{{ ba.extra_client_months | num }}</b></td></tr>
+    <tr><td>Маржа клиента в месяц</td>
+        <td class="r">{{ ba.margin_per_retained_month | money(CUR) }}</td></tr>
+    <tr><td>Эффект удержания за горизонт</td>
+        <td class="r">{{ ba.retention_margin | mln(CUR) }}</td></tr>
+    {% endif %}
     <tr><td>Затронутых на один результат</td>
         <td class="r">{{ ba.contacts_per_activation | num }}</td></tr>
     {% if ba.stock_exhausted_month %}
@@ -158,6 +166,11 @@
         <td class="r">на {{ ba.stock_exhausted_month }}-м месяце</td></tr>
     {% endif %}
   </table>
+  {% if ba.retention_on %}
+  <small class="muted">Удержание считается по <b>двум кривым дожития</b>, а не по затуханию
+  эффекта: удержанный клиент не «затухает», он уходит медленнее, и это уже сидит в новой
+  ставке оттока. Применить сверху затухание значило бы учесть уход дважды.</small><br>
+  {% endif %}
   <small class="muted">Затронутые <b>не попадают</b> в АКБ и в инкремент — они уже в базе,
   и иначе один человек посчитался бы дважды. Растут ОД и оборот, а не число клиентов.</small>
 </section>

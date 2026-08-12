@@ -309,6 +309,9 @@ SCHEMA = {
         "technically_reachable": _RATE, "parts": None,
         "workout_months": (0.0, 600.0), "monthly_inflow": (0.0, 1e9),
         "uplift_rate": _RATE, "measured_against_control": None,
+        # Удержание: тот же клиент того же продукта уходит реже. Единица изменения здесь
+        # не оборот и не остаток, а СРОК ЖИЗНИ — дополнительные клиенто-месяцы.
+        "churn_before": _RATE, "churn_after": _RATE,
         "turnover_before": (0.0, 1e9), "turnover_after": (0.0, 1e9),
         "balance_before": (0.0, 1e9), "balance_after": (0.0, 1e9),
         "decay_months": (0.0, 600.0), "attribution_share": _RATE,
@@ -1545,19 +1548,45 @@ def base_activation_stream(cfg, shape, u):
                                                     workout, horizon, shape)
     cohorts = [s + f for s, f in zip(stock_cohorts, flow_cohorts)]
 
+    # --- удержание: третья единица изменения ----------------------------------
+    # Оборот и остаток отвечают на «сколько клиент приносит». Удержание — на «как долго
+    # он остаётся», и это самый частый эффект фичи в банке. Раньше выразить его было
+    # нечем: `churn_reduction` существовал только у связанного клиента, то есть для
+    # ЧУЖОГО человека.
+    #
+    # Деньги здесь — дополнительные КЛИЕНТО-МЕСЯЦЫ, умноженные на маржу клиента.
+    # Затухание к ним НЕ применяется: удержанный клиент не «затухает», он просто уходит
+    # медленнее — за это отвечает сама новая ставка оттока. Приложить сверху decay
+    # значило бы учесть уход дважды.
+    ch_before, ch_after = g(b, "churn_before"), g(b, "churn_after")
+    retention_on = ch_before > 0 and 0 <= ch_after < ch_before
+    margin_pc_m = monthly_margin(u, 10 ** 6) if retention_on else 0.0
+
     rows = []
+    extra_months_total = 0.0
     for m in range(horizon):
         # Каждая когорта проснувшихся затухает линейно за decay_months.
         live_s = decay_curve(stock_cohorts, decay, m)
         live_f = decay_curve(flow_cohorts, decay, m)
         live = live_s + live_f
-        rows.append({"active_uplifted": live, "margin": live * per_client,
+        # Удержание считается по СВОИМ кривым дожития, а не по кривой затухания эффекта.
+        extra = 0.0
+        if retention_on:
+            for j in range(m + 1):
+                age = m - j
+                extra += cohorts[j] * ((1 - ch_after) ** age - (1 - ch_before) ** age)
+        extra_months_total += extra
+        rows.append({"active_uplifted": live, "margin": live * per_client + extra * margin_pc_m,
                      "from_stock": live_s * per_client, "from_flow": live_f * per_client,
+                     "retained": extra, "margin_retention": extra * margin_pc_m,
                      "turnover_uplift": live * d_turn, "balance_uplift": live * d_bal})
     return {"rows": rows, "activated_total": sum(cohorts),
             "activated_stock": sum(stock_cohorts), "activated_flow": sum(flow_cohorts),
             "stock_exhausted_month": (min(workout, horizon) if workout > 0 else None),
             "conversion": conv, "margin_per_client_m": per_client,
+            "retention_on": retention_on, "extra_client_months": extra_months_total,
+            "margin_per_retained_month": margin_pc_m,
+            "retention_margin": sum(r["margin_retention"] for r in rows),
             "turnover_delta": d_turn, "balance_delta": d_bal}
 
 
@@ -1924,6 +1953,13 @@ def run_pl(cfg, funnel):
             "turnover_delta_per_client": round(basact["turnover_delta"]),
             "balance_delta_per_client": round(basact["balance_delta"]),
             "margin_per_client_m": round(basact["margin_per_client_m"], 2),
+            # удержание: считается по своим кривым дожития и показывается отдельной строкой,
+            # потому что доказывается иначе — контрольной группой на сроке жизни, а не
+            # замером оборота
+            "retention_on": basact["retention_on"],
+            "extra_client_months": round(basact["extra_client_months"]),
+            "margin_per_retained_month": round(basact["margin_per_retained_month"], 2),
+            "retention_margin": round(basact["retention_margin"]),
             "turnover_uplift_total": round(sum(x["turnover_uplift"] for x in rws)),
             "margin_total": round(margin_total),
             "conversion": round(conv, 6),
@@ -2340,6 +2376,41 @@ def validate_extensions(cfg, f, pl):
             "эффекта приходит с действующей базы, тем уже становится разброс сценариев — "
             "вплоть до трёх одинаковых чисел. Стресс-тест по этим допущениям делайте "
             "руками: поменяйте uplift и пересчитайте.")
+
+    # --- удержание своей базы --------------------------------------------------
+    _ba0 = cfg.get("base_activation") or {}
+    _cb, _ca = g(_ba0, "churn_before"), g(_ba0, "churn_after")
+    if _cb > 0 or _ca > 0:
+        _det = pl.get("base_activation") or {}
+        if _ca >= _cb > 0:
+            out.append(
+                f"УДЕРЖАНИЯ НЕТ: отток после ({_ca:.1%}) не ниже оттока до ({_cb:.1%}). "
+                "Блок его не считает — это не ошибка, но если инициатива про удержание, "
+                "числа перепутаны местами.")
+        elif _cb <= 0:
+            out.append(
+                "УДЕРЖАНИЕ НЕ ПОСЧИТАНО: задан отток после, но не задан отток до. "
+                "Сравнивать не с чем — эффект удержания это разница двух кривых дожития.")
+        elif is_value_mode(cfg):
+            out.append(
+                "УДЕРЖАНИЕ НЕ ПОСЧИТАНО: у продукта задан готовый NPV, поэтому месячная "
+                "маржа клиента обнулена — умножать дополнительные клиенто-месяцы не на что. "
+                "Готовый NPV описывает всю жизнь клиента одним числом и продлить её "
+                "не позволяет. Считайте удержание в режиме build_up.")
+        elif _det.get("retention_on"):
+            _months = _det.get("extra_client_months") or 0
+            out.append(
+                f"УДЕРЖАНИЕ: отток {_cb:.1%} → {_ca:.1%} даёт {nf(_months)} дополнительных "
+                f"клиенто-месяцев по {nf(_det.get('margin_per_retained_month'))} ₽ — "
+                f"{nf(_det.get('retention_margin'))} ₽ за горизонт. Затухание к ним "
+                "не применяется: удержанный не «затухает», он уходит медленнее, и это "
+                "уже в новой ставке оттока.")
+            if not _ba0.get("measured_against_control"):
+                out.append(
+                    "УДЕРЖАНИЕ БЕЗ КОНТРОЛЯ: снижение оттока заявлено без замера против "
+                    "контрольной группы. Отток падает и сам — от сезона, от взросления "
+                    "базы, от чужих активностей. Это самый сложный для доказательства "
+                    "эффект: он виден только в сравнении двух групп на длинном сроке.")
 
     ba, bad = cfg.get("base_activation"), pl.get("base_activation")
     # Проверка ДО `if ba and bad`: именно здесь bad равен нулю, и старое условие

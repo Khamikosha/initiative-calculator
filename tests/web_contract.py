@@ -413,3 +413,92 @@ _mhtml = client.get(_mr.headers["location"]).text
 check("У медийной инициативы блок про базу не появляется",
       "Что происходит с базой" not in _mhtml and
       "Инкрементальные клиенты" in _mhtml and "Окупаемость разработки" not in _mhtml)
+
+
+# ------------------------------- Удержание своей базы (BACKLOG 61, первый рычаг)
+# Самый частый эффект фичи в банке — клиент дольше остаётся — выразить было НЕЧЕМ:
+# churn_reduction жил только внутри linked_client, то есть для ЧУЖОГО человека.
+def _retention_case(cb, ca, value=False, control=1):
+    cfg = json.loads(json.dumps(params.defaults()))
+    cfg["meta"].update(name="Ф", type="feature", horizon_months=36)
+    cfg["channels"] = []
+    cfg["audience"] = {"target_size": 0}
+    if value:
+        cfg["unit_economics"].update(
+            mode="value_per_client", value_per_client=5300, value_horizon_months=36,
+            avg_balance=0, nim_annual=0, monthly_turnover=0, interchange_rate=0,
+            cashback_rate=0, servicing_cost_m=0, cor_annual=0, monthly_churn=0.03,
+            ramp_months=1)
+        cfg["meta"]["discount_rate_annual"] = 0.2
+    else:
+        cfg["unit_economics"].update(
+            mode="build_up", avg_balance=20000, nim_annual=0.05, monthly_turnover=15000,
+            interchange_rate=0.012, cashback_rate=0.005, fee_income_m=0,
+            servicing_cost_m=30, cor_annual=0, monthly_churn=0.03, ramp_months=1)
+    cfg["base_activation"] = {
+        "name": "Раздел", "eligible_clients": 2_000_000, "technically_reachable": 1.0,
+        "reach_share": 1.0, "uplift_rate": 0.15, "attribution_share": 1.0,
+        "measured_against_control": control, "turnover_before": 0, "turnover_after": 0,
+        "balance_before": 0, "balance_after": 0,
+        "churn_before": cb, "churn_after": ca, "decay_months": 0}
+    cfg["costs"].update(campaign_months=6, it_dev=30_000_000)
+    return calc.analyze(calc.prepare(cfg))
+
+
+_ret = _retention_case(0.030, 0.024)
+_rd = _ret["pl"]["base_activation"]
+check("Удержание считается: снижение оттока даёт клиенто-месяцы",
+      _rd["retention_on"] and _rd["extra_client_months"] > 500_000,
+      f'{_rd["extra_client_months"]:,} доп. клиенто-месяцев')
+# допуск относительный: маржа на клиента округлена до копеек, на полумиллионе
+# клиенто-месяцев это даёт расхождение в тысячи рублей — оно от округления, а не от модели
+check("И превращается в деньги по марже клиента",
+      abs(_rd["retention_margin"]
+          - _rd["extra_client_months"] * _rd["margin_per_retained_month"])
+      < 0.001 * _rd["retention_margin"],
+      f'{_rd["retention_margin"]:,} ₽ = {_rd["extra_client_months"]:,} мес × '
+      f'{_rd["margin_per_retained_month"]} ₽')
+_none = _retention_case(0, 0)
+check("Без заданного оттока блок ведёт себя как раньше",
+      not _none["pl"]["base_activation"]["retention_on"] and
+      _ret["pl"]["npv"] > _none["pl"]["npv"],
+      f'{_none["pl"]["npv"]:,} → {_ret["pl"]["npv"]:,} ₽')
+
+check("Перепутанные местами ставки названы, а не посчитаны",
+      any("УДЕРЖАНИЯ НЕТ" in v for v in _retention_case(0.024, 0.030)["validation"]))
+check("Отток «после» без «до» — сравнивать не с чем, и так сказано",
+      any("УДЕРЖАНИЕ НЕ ПОСЧИТАНО" in v and "не задан отток до" in v
+          for v in _retention_case(0, 0.024)["validation"]))
+check("В режиме готового NPV удержание не считается, и это объяснено",
+      any("УДЕРЖАНИЕ НЕ ПОСЧИТАНО" in v and "готовый NPV" in v
+          for v in _retention_case(0.03, 0.024, value=True)["validation"]),
+      "продлить жизнь клиента, описанную одним числом, нельзя")
+check("Удержание без контрольной группы окликается отдельно",
+      any("УДЕРЖАНИЕ БЕЗ КОНТРОЛЯ" in v
+          for v in _retention_case(0.03, 0.024, control=0)["validation"]),
+      "отток падает и сам — от сезона, от взросления базы")
+
+check("Затухание к удержанию НЕ применяется — иначе уход считался бы дважды",
+      _retention_case(0.030, 0.024)["pl"]["base_activation"]["retention_margin"] ==
+      _rd["retention_margin"],
+      "удержанный не «затухает», он уходит медленнее, и это уже в новой ставке")
+
+_rf = new_initiative("Удержание", type="feature", product="card")
+client.post(f"/initiative/{_rf}/assumptions", data={
+    "costs.campaign_months": "6", "costs.it_dev": "30000000",
+    "unit_economics.avg_balance": "20000", "unit_economics.nim_annual": "0.05",
+    "unit_economics.monthly_turnover": "15000", "unit_economics.interchange_rate": "0.012",
+    "base_activation.name": "Раздел", "base_activation.eligible_clients": "2000000",
+    "base_activation.technically_reachable": "1", "base_activation.reach_share": "1",
+    "base_activation.uplift_rate": "0.15", "base_activation.attribution_share": "1",
+    "base_activation.churn_before": "0.03", "base_activation.churn_after": "0.024",
+    "action": "save"}, follow_redirects=False)
+_rr = client.post(f"/initiative/{_rf}/calculate", follow_redirects=False)
+_rhtml2 = client.get(_rr.headers["location"]).text
+check("Поля оттока «до» и «после» есть в форме",
+      all(f'name="base_activation.{k}"' in
+          client.get(f"/initiative/{_rf}/assumptions").text
+          for k in ("churn_before", "churn_after")))
+check("Удержание видно на экране результата отдельной строкой",
+      "дополнительные клиенто-месяцы" in _rhtml2.lower() and
+      "Эффект удержания за горизонт" in _rhtml2)
