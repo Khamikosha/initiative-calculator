@@ -316,6 +316,16 @@ SCHEMA = {
         "balance_before": (0.0, 1e9), "balance_after": (0.0, 1e9),
         "decay_months": (0.0, 600.0), "attribution_share": _RATE,
     },
+    # Прирост ступени уже идущего потока: доработка убирает препятствие, и та же самая
+    # воронка начинает доводить больше людей. В отличие от растранзачивания эти люди —
+    # НОВЫЕ клиенты продукта: они попадают в АКБ и в инкремент, потому что раньше
+    # оформления не было вовсе.
+    "funnel_uplift": {
+        "name": None, "step": None, "flow_monthly": (0.0, 1e9),
+        "rate_before": _RATE, "rate_after": _RATE,
+        "attribution_share": _RATE, "measured_against_control": None,
+        "ramp_months": (0.0, 120.0),
+    },
     "brief": None,              # проверяется отдельно: есть вложенные объекты
     "pilot": None,
     "linked_client": None,
@@ -1251,6 +1261,7 @@ BOOK_BLIND = {
     "companion": "продукт-спутник",
     "partner": "P&L партнёра",
     "base_activation": "растранзачивание своей базы",
+    "funnel_uplift": "прирост ступени существующего потока",
     "natural_effect": "натуральный эффект",
 }
 
@@ -1729,8 +1740,34 @@ def build_funnel(cfg):
         plan_total = sum(acquisition_plan(cfg, int(g(cfg["meta"], "horizon_months", 24))))
         activated = plan_total
 
+    # --- прирост ступени существующего потока ---------------------------------
+    # Воронка в модели медийная: показы → отклик → заявка. Доработка меняет ступень УЖЕ
+    # идущего потока — «было 60%, стало 72%», — и выразить это было нечем: прирост
+    # считали руками и вносили планом продаж. На живом списке из 50 идей таких
+    # оказалось 15 из 50, то есть треть портфеля.
+    #
+    # Deadweight к этим клиентам НЕ применяется: препятствие мешало им оформиться,
+    # и «взяли бы и так» здесь означало бы, что препятствия не было. За ту часть,
+    # которая дошла бы другим путём или позже, отвечает attribution_share.
+    # Каннибализация применяется: новый вклад вполне может съесть старый.
+    fu = cfg.get("funnel_uplift") or {}
+    fu_monthly = fu_total = 0.0
+    if fu:
+        d_rate = g(fu, "rate_after") - g(fu, "rate_before")
+        if d_rate > 0:
+            months_h = int(g(cfg.get("meta") or {}, "horizon_months", 24))
+            ramp_fu = int(g(fu, "ramp_months", 0))
+            fu_monthly = g(fu, "flow_monthly") * d_rate * g(fu, "attribution_share", 1.0)
+            # доработка выкатывается не мгновенно: первые ramp месяцев эффекта нет
+            fu_total = fu_monthly * max(0, months_h - ramp_fu)
+    activated = activated + fu_total
+
     incremental = activated * (1 - g(f, "cannibalization")) * (1 - g(f, "deadweight"))
+    if fu_total:
+        # deadweight снимаем ТОЛЬКО с этой части, вернув её обратно
+        incremental += fu_total * (1 - g(f, "cannibalization")) * g(f, "deadweight")
     return {"channels": ch_out, "target_audience": round(aud),
+            "funnel_uplift_monthly": round(fu_monthly), "funnel_uplift_total": round(fu_total),
             "combined_reach_share": round(combined_reach, 4),
             "combined_reach_abs": round(combined_reach * aud),
             "total_impressions": round(total_impr),
@@ -2376,6 +2413,45 @@ def validate_extensions(cfg, f, pl):
             "эффекта приходит с действующей базы, тем уже становится разброс сценариев — "
             "вплоть до трёх одинаковых чисел. Стресс-тест по этим допущениям делайте "
             "руками: поменяйте uplift и пересчитайте.")
+
+    # --- прирост ступени существующего потока ----------------------------------
+    _fu = cfg.get("funnel_uplift") or {}
+    if _fu.get("flow_monthly") or _fu.get("rate_after"):
+        _rb, _ra = g(_fu, "rate_before"), g(_fu, "rate_after")
+        _flow = g(_fu, "flow_monthly")
+        if _flow <= 0:
+            out.append("ПРИРОСТ СТУПЕНИ НЕ ПОСЧИТАН: не задан поток на ступени. Это не "
+                       "размер рынка и не вся база, а сколько человек в месяц ДОХОДИТ "
+                       "до места, где стоит препятствие.")
+        elif _ra <= _rb:
+            out.append(
+                f"ПРИРОСТА НЕТ: конверсия после ({_ra:.0%}) не выше текущей ({_rb:.0%}). "
+                "Блок ничего не добавляет — проверьте, не перепутаны ли числа местами.")
+        else:
+            _add = f.get("funnel_uplift_monthly") or 0
+            out.append(
+                f"ПРИРОСТ СТУПЕНИ: {nf(_flow)} человек в месяц доходят до ступени "
+                f"«{_fu.get('step') or 'без названия'}», конверсия {_rb:.0%} → {_ra:.0%} "
+                f"даёт {nf(_add)} дополнительных клиентов в месяц. Deadweight к ним "
+                "не применяется: препятствие им мешало, и «взяли бы и так» здесь означало "
+                "бы, что препятствия не было. За тех, кто добрался бы другим путём, "
+                "отвечает доля прироста на инициативу.")
+            if not _fu.get("measured_against_control"):
+                out.append(
+                    "КОНВЕРСИЯ ПОСЛЕ — ОЦЕНКА, А НЕ ЗАМЕР: A/B или пилот не заявлены. "
+                    "Это самое слабое место такой инициативы: «станет лучше» звучит "
+                    "убедительно и проверяется только опытом. Весь прирост здесь — "
+                    "грейд C, и вердикт по нему принимать рано.")
+            if g(_fu, "attribution_share", 1.0) >= 1.0:
+                out.append(
+                    "ВЕСЬ ПРИРОСТ ОТНЕСЁН НА ИНИЦИАТИВУ: доля 100%. Часть людей дошла бы "
+                    "другим путём — в отделении, со второй попытки, через поддержку. "
+                    "Ноль таких почти не бывает.")
+            if g(_fu, "ramp_months") <= 0:
+                out.append(
+                    "ДОРАБОТКА РАБОТАЕТ С ПЕРВОГО МЕСЯЦА: срок разработки и раскатки "
+                    "не задан. На горизонте 12–36 месяцев это заметно завышает эффект — "
+                    "особенно у тяжёлых доработок в отделениях и внешних сервисах.")
 
     # --- удержание своей базы --------------------------------------------------
     _ba0 = cfg.get("base_activation") or {}

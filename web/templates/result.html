@@ -121,6 +121,22 @@
   </div>
 </section>
 
+{% if f.funnel_uplift_total %}
+<section class="card">
+  <h3>Прирост ступени потока</h3>
+  <p class="muted">Доработка не приводит новых людей рекламой — она перестаёт терять тех,
+  кто и так шёл. Эти клиенты входят в инкремент и в АКБ.</p>
+  <div class="funnel">
+    <div><span>Дополнительно в месяц</span><b>{{ f.funnel_uplift_monthly | num }}</b>
+      <small>клиентов, доведённых ступенью</small></div>
+    <div class="last"><span>За горизонт</span><b>{{ f.funnel_uplift_total | num }}</b>
+      <small>до вычета каннибализации</small></div>
+  </div>
+  <small class="muted">Deadweight к ним не применяется: препятствие им мешало.
+  За тех, кто добрался бы другим путём, отвечает доля прироста на инициативу.</small>
+</section>
+{% endif %}
+
 {% set ba = pl.base_activation %}
 {% if ba and not has_acq %}
 <section class="card">
@@ -264,6 +280,22 @@
 {% endif %}
 
 {% if pl.base_activation %}
+{% if f.funnel_uplift_total %}
+<section class="card">
+  <h3>Прирост ступени потока</h3>
+  <p class="muted">Доработка не приводит новых людей рекламой — она перестаёт терять тех,
+  кто и так шёл. Эти клиенты входят в инкремент и в АКБ.</p>
+  <div class="funnel">
+    <div><span>Дополнительно в месяц</span><b>{{ f.funnel_uplift_monthly | num }}</b>
+      <small>клиентов, доведённых ступенью</small></div>
+    <div class="last"><span>За горизонт</span><b>{{ f.funnel_uplift_total | num }}</b>
+      <small>до вычета каннибализации</small></div>
+  </div>
+  <small class="muted">Deadweight к ним не применяется: препятствие им мешало.
+  За тех, кто добрался бы другим путём, отвечает доля прироста на инициативу.</small>
+</section>
+{% endif %}
+
 {% set ba = pl.base_activation %}
 <section class="card">
   <h3>{{ ba.name }}</h3>

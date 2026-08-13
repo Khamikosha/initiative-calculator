@@ -502,3 +502,80 @@ check("Поля оттока «до» и «после» есть в форме",
 check("Удержание видно на экране результата отдельной строкой",
       "дополнительные клиенто-месяцы" in _rhtml2.lower() and
       "Эффект удержания за горизонт" in _rhtml2)
+
+
+# ------------------------------- Прирост ступени потока (BACKLOG 61, второй рычаг)
+# На списке из 50 живых идей таких оказалось 15 — треть портфеля. Форма у всех одна:
+# есть поток, он на какой-то ступени спотыкается, доработка убирает препятствие.
+# Выразить это было нечем: прирост считали руками и вносили планом продаж.
+def _uplift_case(**fu):
+    cfg = json.loads(json.dumps(params.defaults()))
+    cfg["meta"].update(name="Доработка", type="product_change", horizon_months=36,
+                       product="kids_key_deposit", discount_rate_annual=0.2)
+    cfg["channels"] = []
+    cfg["audience"] = {"target_size": 0}
+    cfg["unit_economics"].update(
+        mode="value_per_client", value_per_client=14670, value_horizon_months=36,
+        avg_balance=0, nim_annual=0, monthly_turnover=0, interchange_rate=0,
+        cashback_rate=0, servicing_cost_m=0, cor_annual=0, monthly_churn=0.02,
+        ramp_months=1)
+    cfg["funnel"].update(approval_rate=1.0, activation_rate=1.0,
+                         cannibalization=0.1, deadweight=0.3)
+    cfg["funnel_uplift"] = {
+        "name": "Согласие онлайн", "step": "подписание согласия",
+        "flow_monthly": 8000, "rate_before": 0.62, "rate_after": 0.74,
+        "attribution_share": 1.0, "measured_against_control": 1, "ramp_months": 0,
+        **fu}
+    cfg["costs"].update(campaign_months=1, it_dev=15_000_000)
+    return calc.analyze(calc.prepare(cfg))
+
+
+_up = _uplift_case()
+_uf = _up["funnel"]
+check("Прирост ступени превращается в клиентов",
+      _uf["funnel_uplift_monthly"] == 960 and _uf["funnel_uplift_total"] == 34560,
+      "8 000 × 12 п.п. = 960 в месяц, 34 560 за 36 месяцев")
+check("Эти клиенты входят в инкремент — они новые для продукта",
+      _uf["incremental_clients"] == round(34560 * 0.9),
+      "в отличие от растранзачивания, где затронутые в инкремент намеренно не идут")
+check("Deadweight к ним НЕ применяется",
+      _uf["incremental_clients"] > 34560 * (1 - 0.1) * (1 - 0.3) + 1,
+      "препятствие им мешало: «взяли бы и так» означало бы, что препятствия не было")
+check("Каннибализация применяется — новый вклад может съесть старый",
+      _uf["incremental_clients"] < _uf["funnel_uplift_total"])
+
+check("Срок раскатки съедает часть эффекта",
+      _uplift_case(ramp_months=6)["funnel"]["funnel_uplift_total"] == 960 * 30,
+      "тяжёлая доработка не работает с первого месяца")
+check("Доля прироста на инициативу режет результат",
+      _uplift_case(attribution_share=0.8)["funnel"]["funnel_uplift_total"] ==
+      round(34560 * 0.8))
+
+check("Конверсия, которая не выросла, названа, а не посчитана",
+      any("ПРИРОСТА НЕТ" in v for v in _uplift_case(rate_after=0.60)["validation"]))
+check("Не заданный поток объяснён: это не рынок и не вся база",
+      any("не задан поток на ступени" in v
+          for v in _uplift_case(flow_monthly=0)["validation"]))
+check("Конверсия «после» без A/B помечена как оценка",
+      any("КОНВЕРСИЯ ПОСЛЕ — ОЦЕНКА" in v
+          for v in _uplift_case(measured_against_control="")["validation"]),
+      "самое слабое место такой инициативы: «станет лучше» звучит убедительно")
+check("Стопроцентная атрибуция окликается",
+      any("ВЕСЬ ПРИРОСТ ОТНЕСЁН" in v for v in _up["validation"]))
+check("Мгновенная раскатка окликается",
+      any("ДОРАБОТКА РАБОТАЕТ С ПЕРВОГО МЕСЯЦА" in v for v in _up["validation"]))
+
+check("Книга этот блок не знает, и это объявлено",
+      "funnel_uplift" in calc.BOOK_BLIND,
+      "иначе выгрузка молча потеряла бы весь эффект доработки")
+
+_ui = new_initiative("Доработка", type="product_change", product="kids_key_deposit")
+_upage = client.get(f"/initiative/{_ui}/assumptions").text
+check("Блок доработки — первый на странице для этого типа",
+      "Прирост ступени существующего потока" in
+      _upage.split('<section class="card">')[1].split("</section>")[0],
+      "у доработки главный блок свой, а не медиаплан")
+check("Все поля блока есть в форме",
+      all(f'name="funnel_uplift.{k}"' in _upage
+          for k in ("flow_monthly", "rate_before", "rate_after",
+                    "attribution_share", "ramp_months")))
