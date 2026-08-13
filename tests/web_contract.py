@@ -595,3 +595,40 @@ check("И это заметно дисконтирует результат",
       _sh["pl"]["npv"] < sum(r["gross_margin"] for r in _sh["monthly"])
       - _sh["pl"]["total_costs"],
       "признание всего притока в первый месяц завышало NPV на четверть")
+
+
+# ОД растёт не только от новых клиентов: инициатива на своей базе тоже его двигает,
+# а раньше он выходил ровно нулём — считался по кривой привлечённых, которой у фичи нет.
+# ОД на клиента нужен явно: без него считать нечего, и движок вернёт None,
+# а не ноль — это разные ответы
+def _od_case(cb, ca):
+    cfg = json.loads(json.dumps(params.defaults()))
+    cfg["meta"].update(name="ОД", type="feature", horizon_months=36)
+    cfg["channels"] = []
+    cfg["audience"] = {"target_size": 0}
+    cfg["unit_economics"].update(
+        mode="build_up", avg_balance=20000, nim_annual=0.05, monthly_turnover=0,
+        interchange_rate=0, cashback_rate=0, fee_income_m=0, servicing_cost_m=30,
+        cor_annual=0, monthly_churn=0.03, ramp_months=1,
+        operating_income_annual=2966)          # [F] реестр: ОД подростка в год
+    cfg["base_activation"] = {
+        "name": "Р", "eligible_clients": 2_000_000, "technically_reachable": 1.0,
+        "reach_share": 1.0, "uplift_rate": 0.15, "attribution_share": 1.0,
+        "measured_against_control": 1, "turnover_before": 0, "turnover_after": 0,
+        "balance_before": 0, "balance_after": 0,
+        "churn_before": cb, "churn_after": ca, "decay_months": 0}
+    cfg["costs"].update(campaign_months=6, it_dev=30_000_000)
+    return calc.analyze(calc.prepare(cfg))
+
+
+_od_ret = _od_case(0.030, 0.024)
+check("Удержание даёт операционный доход, а не только маржу",
+      (_od_ret["pl"]["effect"] or {}).get("od_from_base"),
+      "клиент остался — банк продолжает получать ВЕСЬ его ОД, а не только прирост")
+_od_none = _od_case(0, 0)
+check("Без эффекта на базе ОД оттуда не берётся",
+      not (_od_none["pl"]["effect"] or {}).get("od_from_base"))
+check("ОД считается доходом, а не маржой: обслуживание в нём не вычитается",
+      ((_od_ret["pl"]["effect"] or {}).get("od_total") or 0) >
+      _od_ret["pl"]["margin_sources"]["base_activation"],
+      "иначе это была бы вторая маржа под другим именем")

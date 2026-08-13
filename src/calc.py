@@ -1823,7 +1823,7 @@ def market_position(cfg, active):
             "share_of_total": round(peak / total, 4) if total else None}
 
 
-def effect_summary(u, rows, r_m, net, npv):
+def effect_summary(u, rows, r_m, net, npv, basact=None):
     """Один и тот же прирост клиентов, посчитанный в разных валютах.
 
     Стейкхолдеры меряют разным: маркетинг — АКБ, финансы — ОД и PL, розница — AUM
@@ -1841,11 +1841,32 @@ def effect_summary(u, rows, r_m, net, npv):
     od_total = client_months * od / 12.0
     od_disc = sum(x["active_clients"] * od / 12.0 / ((1 + r_m) ** (i + 1))
                   for i, x in enumerate(rows))
+
+    # ОД растёт не только от НОВЫХ клиентов. Инициатива на своей базе тоже его двигает,
+    # и раньше он выходил ровно нулём: считался по кривой привлечённых, которой у фичи
+    # нет. Два разных вклада, и они складываются:
+    #
+    #   изменение поведения — доход с ПРИРОСТА оборота и остатка. Кэшбэк и обслуживание
+    #     не вычитаются: ОД это доход, а не маржа;
+    #   удержание — клиент остался, значит банк продолжает получать ВЕСЬ его ОД,
+    #     а не только прирост. Поэтому здесь ОД на клиента целиком.
+    od_base = od_base_disc = 0.0
+    if basact:
+        fee = split_fee(g(u, "turnover_split", None), g(u, "interchange_rate"))
+        rev_pc = (basact["balance_delta"] * g(u, "nim_annual") / 12.0
+                  + basact["turnover_delta"] * fee)
+        for i, r in enumerate(basact["rows"]):
+            add = r["active_uplifted"] * rev_pc + r.get("retained", 0.0) * od / 12.0
+            od_base += add
+            od_base_disc += add / ((1 + r_m) ** (i + 1))
+    od_total += od_base
+    od_disc += od_base_disc
     return {
         "akb_peak": round(peak), "akb_end": round(end), "client_months": round(client_months),
         "od_annual_per_client": round(od) if od else None,
-        "od_total": round(od_total) if od else None,
-        "od_discounted": round(od_disc) if od else None,
+        "od_total": round(od_total) if (od or od_base) else None,
+        "od_discounted": round(od_disc) if (od or od_base) else None,
+        "od_from_base": round(od_base) if od_base else None,
         # доп. объём средств на продуктах = баланс инкрементальных клиентов
         "aum_peak": round(peak * bal) if bal else None,
         "aum_end": round(end * bal) if bal else None,
@@ -1943,7 +1964,7 @@ def run_pl(cfg, funnel):
     # Маржа привлечённого клиента: свой продукт плюс то, что появляется вместе с ним.
     acq_gm = sum(r["margin_own"] + r["margin_companion"] + r["margin_linked"] for r in rows)
     mkt_cost = media + g(k, "production") + acq_total
-    effect = effect_summary(u, rows, r_m, total_gm - total_cost, cum_disc)
+    effect = effect_summary(u, rows, r_m, total_gm - total_cost, cum_disc, basact)
 
     # Из чего сложилась маржа. Без этой разбивки нельзя увидеть главное свойство
     # таких инициатив: продукт может почти ничего не зарабатывать сам и при этом
