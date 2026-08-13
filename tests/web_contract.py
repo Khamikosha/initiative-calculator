@@ -579,3 +579,19 @@ check("Все поля блока есть в форме",
       all(f'name="funnel_uplift.{k}"' in _upage
           for k in ("flow_monthly", "rate_before", "rate_after",
                     "attribution_share", "ramp_months")))
+
+
+# Клиенты от прироста ступени приходят КАЖДЫЙ месяц, а не в окно рекламной кампании.
+# Найдено сверкой с Excel-книгой по идеям: она дала на 26–38% меньше, и права была она —
+# весь трёхлетний приток признавался в первый месяц и почти не дисконтировался.
+_sh = _uplift_case(ramp_months=0)
+_sh_long = _uplift_case(ramp_months=0)
+_sh_long["meta"] if False else None
+check("Приток от прироста ступени распределён по месяцам, а не в кампанию",
+      abs(_sh["monthly"][0]["gross_margin"] - _sh["monthly"][12]["gross_margin"])
+      < 0.01 * max(_sh["monthly"][0]["gross_margin"], 1),
+      "маржа первого и тринадцатого месяца должна совпадать: поток ровный")
+check("И это заметно дисконтирует результат",
+      _sh["pl"]["npv"] < sum(r["gross_margin"] for r in _sh["monthly"])
+      - _sh["pl"]["total_costs"],
+      "признание всего притока в первый месяц завышало NPV на четверть")

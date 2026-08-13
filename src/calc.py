@@ -1766,8 +1766,15 @@ def build_funnel(cfg):
     if fu_total:
         # deadweight снимаем ТОЛЬКО с этой части, вернув её обратно
         incremental += fu_total * (1 - g(f, "cannibalization")) * g(f, "deadweight")
+    # Клиенты от прироста ступени приходят КАЖДЫЙ МЕСЯЦ, пока идёт поток, — а не в окно
+    # рекламной кампании. Разделяем их с медийным инкрементом, иначе весь трёхлетний
+    # приток признаётся в первый месяц и почти не дисконтируется.
+    #
+    # Нашлось сверкой с Excel-книгой: она дала на 26–38% меньше, и права была она.
+    fu_inc_m = (fu_monthly * (1 - g(f, "cannibalization"))) if fu_monthly else 0.0
     return {"channels": ch_out, "target_audience": round(aud),
             "funnel_uplift_monthly": round(fu_monthly), "funnel_uplift_total": round(fu_total),
+            "_fu_inc_monthly": fu_inc_m, "_fu_ramp": int(g(fu, "ramp_months", 0)) if fu else 0,
             "combined_reach_share": round(combined_reach, 4),
             "combined_reach_abs": round(combined_reach * aud),
             "total_impressions": round(total_impr),
@@ -1868,7 +1875,13 @@ def run_pl(cfg, funnel):
     hurdle = g(cfg.get("rice") or {}, "hurdle_ltv_cac", 0.0) or g(
         cfg.get("meta") or {}, "hurdle_ltv_cac", 0.0) or 3.0
     shape = acquisition_shape(cfg, h, camp_m)
-    cohorts = [inc * w for w in shape]
+    # Медийный инкремент расходится по форме кампании; прирост ступени идёт ровно,
+    # месяц за месяцем, начиная с окончания раскатки. Смешивать их одной формой нельзя:
+    # у них разная природа притока.
+    fu_m = funnel.get("_fu_inc_monthly", 0.0)
+    fu_ramp = funnel.get("_fu_ramp", 0)
+    inc_media = inc - fu_m * max(0, h - fu_ramp)
+    cohorts = [inc_media * shape[m] + (fu_m if m >= fu_ramp else 0.0) for m in range(h)]
 
     # Активная база считается до потоков: и спутник, и связанный клиент живут на ней.
     active_curve, a = [], 0.0
