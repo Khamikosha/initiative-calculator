@@ -1861,15 +1861,30 @@ def effect_summary(u, rows, r_m, net, npv, basact=None):
             od_base_disc += add / ((1 + r_m) ** (i + 1))
     od_total += od_base
     od_disc += od_base_disc
+
+    # AUM на своей базе: прирост остатка у изменивших поведение плюс остаток удержанных
+    aum_base_peak = aum_base_end = 0.0
+    if basact:
+        per = [(r["active_uplifted"] * basact["balance_delta"] + r.get("retained", 0.0) * bal)
+               for r in basact["rows"]]
+        aum_base_peak = max(per) if per else 0.0
+        aum_base_end = per[-1] if per else 0.0
     return {
         "akb_peak": round(peak), "akb_end": round(end), "client_months": round(client_months),
         "od_annual_per_client": round(od) if od else None,
         "od_total": round(od_total) if (od or od_base) else None,
         "od_discounted": round(od_disc) if (od or od_base) else None,
         "od_from_base": round(od_base) if od_base else None,
-        # доп. объём средств на продуктах = баланс инкрементальных клиентов
-        "aum_peak": round(peak * bal) if bal else None,
-        "aum_end": round(end * bal) if bal else None,
+        # Доп. объём средств = баланс инкрементальных клиентов ПЛЮС то, что принесла
+        # инициатива на своей базе. Второе слагаемое раньше терялось так же, как ОД:
+        # у фичи нет привлечённых клиентов, и AUM выходил нулём при том, что деньги
+        # на продукт пришли.
+        #
+        #   изменение поведения — ПРИРОСТ остатка у затронутых;
+        #   удержание           — весь остаток тех, кто остался: их деньги не ушли.
+        "aum_peak": round(peak * bal + aum_base_peak) if (bal or aum_base_peak) else None,
+        "aum_end": round(end * bal + aum_base_end) if (bal or aum_base_end) else None,
+        "aum_from_base": round(aum_base_peak) if aum_base_peak else None,
         "funds_per_client": round(bal) if bal else None,
         "pl_net": round(net), "pl_npv": round(npv),
     }
