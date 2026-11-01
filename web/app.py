@@ -887,6 +887,35 @@ async def api_confidence(request: Request):
                         {"index": None, "tier": "—", "note": "Проставьте грейды допущений."})
 
 
+@app.post("/api/costs/preview")
+async def api_costs_preview(request: Request):
+    """Во что раскладывается каждая статья затрат — до сохранения, пока человек правит.
+
+    Разовую затрату, ошибочно положенную в «Постоянные расходы», движок умножает
+    на горизонт: 2,5 млн ₽/мес × 36 мес = 90 млн. Раскладку и вопрос-предупреждение
+    надо показать в момент ввода, а не после того, как на этой цифре построили NPV.
+    Ни одной формулы здесь нет — раскладку считает cost_breakdown, предупреждение
+    выдаёт validate(); фильтруем по затратам ровно как /api/pilot/preview по пилоту.
+    """
+    body = await request.json()
+    probe = params.defaults()
+    costs = {k: _num(v) for k, v in (body.get("costs") or {}).items()
+             if v not in (None, "")}
+    probe["costs"].update(costs)
+    horizon = body.get("horizon_months")
+    if horizon not in (None, ""):
+        probe["meta"]["horizon_months"] = int(_num(horizon))
+    try:
+        calc.validate_config(probe)
+    except calc.ConfigError as e:
+        return JSONResponse({"errors": [ln.strip(" -") for ln in str(e).splitlines()[1:]],
+                             "items": [], "warnings": []})
+    f, pl = calc.evaluate(probe)
+    return JSONResponse({
+        "errors": [], "items": calc.cost_breakdown(probe),
+        "warnings": [w for w in calc.validate(probe, f, pl) if "СТАТЬЮ ЗАТРАТ" in w]})
+
+
 # ------------------------------------------------------------------ расчёт
 @app.post("/initiative/{iid}/calculate")
 @app.get("/initiative/{iid}/calculate")

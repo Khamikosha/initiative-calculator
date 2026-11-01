@@ -2110,6 +2110,74 @@ def run_pl(cfg, funnel):
             "breakeven_clients": round(total_cost / (acq_gm / inc)) if inc > 0 and acq_gm > 0 else None,
             "monthly": [{kk: (round(vv) if isinstance(vv, float) else vv) for kk, vv in r.items()} for r in rows]}
 
+# Ярлыки статей затрат для раскладки. Дублируют label из реестра params.py
+# (см. COSTS: «Производство и креатив», «IT-разработка», …) намеренно: params
+# импортирует calc, поэтому обратный импорт запрещён (цикл). Так же в этом файле
+# уже поступает TORNADO — держит русские ярлыки строками, а не тянет их из реестра.
+COST_LABELS = {"production": "Производство и креатив",
+               "it_dev": "IT-разработка",
+               "one_off_other": "Прочие разовые затраты",
+               "opex_monthly": "Постоянные расходы",
+               "acq_cost_per_client": "Выплата за привлечение"}
+# Разовые статьи: списываются один раз в месяц 0 (run_pl, m == 0).
+_ONE_OFF_COST_KEYS = ("production", "it_dev", "one_off_other")
+
+
+def cost_breakdown(cfg):
+    """Во что раскладывается каждая статья затрат на горизонте. READ-ONLY: ничего
+    не считает сверх раскладки уже введённых чисел, модель не запускает.
+
+    Инкапсулирует то же правило разнесения, что зашито в run_pl (см. m == 0 для
+    разовых, opex каждый месяц, acq — на клиента): разовые (production/it_dev/
+    one_off_other) списываются один раз; постоянные (opex_monthly) — каждый месяц
+    горизонта; выплата за привлечение — за каждого сработавшего клиента. `kind`
+    ВЫВОДИТСЯ здесь из этого правила, а не из нового поля реестра.
+
+    Возвращает список статей с ненулевым значением; по каждой — словарь
+    {key, label, kind, per_period, months, total_over_horizon, share}. Доля считается
+    только по статьям с известной суммой за горизонт (разовые + постоянные): у выплаты
+    за привлечение сумма зависит от числа клиентов, поэтому total_over_horizon = None
+    и в знаменатель доли она не входит — врать округлением до нуля нельзя.
+    """
+    k = cfg.get("costs") or {}
+    h = int(g(cfg.get("meta") or {}, "horizon_months", 24))
+    items = []
+    for key in _ONE_OFF_COST_KEYS:
+        v = g(k, key)
+        if v > 0:
+            items.append({"key": key, "label": COST_LABELS[key], "kind": "разовое",
+                          "per_period": round(v), "months": 1,
+                          "total_over_horizon": round(v), "share": None})
+    opex = g(k, "opex_monthly")
+    if opex > 0:
+        opex_total = round(opex * h)
+        items.append({"key": "opex_monthly", "label": COST_LABELS["opex_monthly"],
+                      "kind": "постоянное", "per_period": round(opex), "months": h,
+                      "total_over_horizon": opex_total, "share": None,
+                      # Мягкая заметка (не предупреждение и не флаг): делает множитель ×горизонт
+                      # видимым и напоминает, куда отнести разовую статью, если она попала сюда
+                      # по ошибке. Есть всегда при opex > 0, порога нет — нейтральный тон, чтобы
+                      # не превратиться в шум (BACKLOG п. 56 против ложных срабатываний).
+                      "note": f"постоянные расходы за горизонт = {nf(opex_total)} ₽; "
+                              f"если это разовая статья (креатив, запуск, промо), её место — "
+                              f"„Производство“ или „Прочие разовые“"})
+    acq = g(k, "acq_cost_per_client")
+    if acq > 0:
+        items.append({"key": "acq_cost_per_client",
+                      "label": COST_LABELS["acq_cost_per_client"], "kind": "на клиента",
+                      "per_period": round(acq), "months": None,
+                      "total_over_horizon": None, "share": None,
+                      "note": "Платится за каждого сработавшего клиента — сумма за горизонт "
+                              "зависит от их числа и здесь не раскладывается."})
+    known = sum(it["total_over_horizon"] for it in items
+                if it["total_over_horizon"] is not None)
+    if known > 0:
+        for it in items:
+            if it["total_over_horizon"] is not None:
+                it["share"] = round(it["total_over_horizon"] / known, 4)
+    return items
+
+
 def evaluate(cfg):
     f = build_funnel(cfg)
     return f, run_pl(cfg, f)
@@ -2737,6 +2805,39 @@ def validate(cfg, f, pl):
                    "не посчитан и в отчёте будет пустым."
                    + (f" Нет данных по возрастам сегментов: {', '.join(blind)}." if blind else "")
                    + " Остальные валюты — АКБ, AUM и PL — считаются как обычно.")
+
+    # ПРОВЕРЬТЕ СТАТЬЮ ЗАТРАТ: разовую затрату могли положить в «Постоянные расходы».
+    # Живой инцидент: разовую маркетинговую поддержку 2,5 млн ₽ завели в opex_monthly,
+    # движок умножил на горизонт (× 36 мес) = 90 млн вместо 2,5 млн — NPV просел
+    # на десятки млн, и ошибка была невидима на вводе. Это оговорка о ВВОДЕ, а не
+    # красный флаг по экономике, поэтому она здесь, в validate(), а не в flags():
+    # flags() зеркалится в Excel-книгу через MARKERS (tests/check_xlsx_sync.py),
+    # а этой проверке зеркало в книге не нужно.
+    #
+    # Триггер по СИГНАТУРЕ ошибки, а не просто «opex велик»: постоянные расходы
+    # доминируют в затратах И все разовые близки к нулю. У законного продукта с большим
+    # run-rate разовые (креатив, IT, лицензии) ненулевые — сигнатуры нет, вопрос не
+    # задаётся. Порог доминирования 50% взят по образцу marketing_share_of_costs из
+    # flags() («ROMI СЧИТАЕТСЯ НЕ КО ВСЕМ ЗАТРАТАМ») — та же граница «половина всех
+    # затрат». Кратность ≥ 10× к сумме разовых кодирует «разовые ≈ 0».
+    kt = cfg["costs"]
+    opex = g(kt, "opex_monthly")
+    one_off = g(kt, "production") + g(kt, "it_dev") + g(kt, "one_off_other")
+    opex_total = opex * h
+    total_costs = pl.get("total_costs") or 0
+    OPEX_DOMINANCE = 0.5    # доля всех затрат — та же граница, что у marketing_share_of_costs
+    ONE_OFF_RATIO = 10      # opex за горизонт в ≥10 раз больше разовых => разовые ≈ 0
+    if (opex > 0 and total_costs > 0
+            and opex_total >= OPEX_DOMINANCE * total_costs
+            and one_off * ONE_OFF_RATIO < opex_total):
+        share = round(opex_total / total_costs * 100)
+        tail = (f"и в {nf(round(opex_total / one_off))} раз больше всех разовых"
+                if one_off > 0 else "при том что разовых затрат нет вовсе")
+        out.append(
+            f"ПРОВЕРЬТЕ СТАТЬЮ ЗАТРАТ: постоянные расходы {nf(opex)} ₽/мес × {h} мес = "
+            f"{nf(opex_total)} ₽ — это {share}% всех затрат {tail}. Они списываются "
+            "КАЖДЫЙ месяц горизонта. Если это разовая статья (креатив, запуск, промо), "
+            "её место — «Производство» или «Прочие разовые» (списываются один раз).")
 
     # насыщение канала: добавочный бюджет уже не работает
     for c in f["channels"]:

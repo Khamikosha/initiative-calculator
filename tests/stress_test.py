@@ -157,6 +157,27 @@ check("Правильный тип канала предупреждения н�
 cfg["channels"][0].update(kind="internal", budget=0)
 check("Канал без бюджета не считается потраченным впустую", not has(cfg, "БЮДЖЕТ ВПУСТУЮ"))
 
+# Разовую затрату положили в «Постоянные расходы»: 2,5 млн ₽/мес × 36 мес = 90 млн
+# вместо 2,5 млн. Триггер по сигнатуре — opex доминирует, разовые ≈ 0, а не «opex велик».
+_incident = prm.defaults()
+_incident["costs"].update({"opex_monthly": 2_500_000})
+_incident["meta"]["horizon_months"] = 36
+check("Ловится: разовая затрата в постоянных расходах (opex-доминанта, разовые ≈ 0)",
+      has(_incident, "ПРОВЕРЬТЕ СТАТЬЮ ЗАТРАТ"))
+# Законный run-rate: постоянные расходы велики, НО и разовые крупные (креатив + IT).
+# Сигнатуры ошибки нет — вопрос не задаётся, иначе он кричал бы на каждом запуске продукта.
+_legit = prm.defaults()
+_legit["costs"].update({"opex_monthly": 2_500_000, "production": 60_000_000,
+                        "it_dev": 50_000_000})
+_legit["meta"]["horizon_months"] = 36
+check("Не срабатывает: run-rate законно большой при крупных разовых",
+      not has(_legit, "ПРОВЕРЬТЕ СТАТЬЮ ЗАТРАТ"))
+# opex ноль — раскладывать нечего, вопроса нет.
+_noopex = prm.defaults()
+_noopex["costs"].update({"production": 5_000_000})
+check("Не срабатывает: постоянных расходов нет вовсе",
+      not has(_noopex, "ПРОВЕРЬТЕ СТАТЬЮ ЗАТРАТ"))
+
 # ---------------------------------------------------------------- 7. Экономическая логика
 cfg = copy.deepcopy(BASE); cfg["unit_economics"]["cor_annual"] = 0.15
 _, p_cor = run(cfg)
@@ -172,6 +193,58 @@ cfg = copy.deepcopy(BASE); cfg["costs"]["it_dev"] = 500_000_000
 _, p_it = run(cfg)
 check("IT-разработка бьёт по NPV, но не по ROMI",
       p_it["npv"] < p["npv"] and p_it["romi"] == p["romi"])
+
+# ------------------------------------------------------------------ раскладка затрат
+# Раскладка обязана совпадать с тем, что реально списывает run_pl: разовое один раз,
+# постоянное — каждый месяц горизонта. Сверяем и на инциденте, и на живом P&L.
+_cb_cfg = prm.defaults()
+_cb_cfg["costs"].update({"production": 3_000_000, "it_dev": 7_000_000,
+                        "one_off_other": 0, "opex_monthly": 2_500_000})
+_cb_cfg["meta"]["horizon_months"] = 36
+_bd = {it["key"]: it for it in calc.cost_breakdown(_cb_cfg)}
+check("Раскладка: разовое = per_period (списывается один раз)",
+      _bd["production"]["kind"] == "разовое" and
+      _bd["production"]["total_over_horizon"] == 3_000_000 and
+      _bd["production"]["months"] == 1)
+check("Раскладка: постоянное = per_period × горизонт",
+      _bd["opex_monthly"]["kind"] == "постоянное" and
+      _bd["opex_monthly"]["total_over_horizon"] == 2_500_000 * 36 == 90_000_000 and
+      _bd["opex_monthly"]["months"] == 36)
+check("Раскладка: 2,5 млн opex при горизонте 36 даёт 90 млн за горизонт",
+      _bd["opex_monthly"]["total_over_horizon"] == 90_000_000)
+check("Раскладка: доли считаются только по статьям с известной суммой",
+      abs(sum(it["share"] for it in _bd.values()) - 1.0) < 1e-6)
+# сверка с реальным P&L: сумма разнесённых статей = сумма затрат, которые списал run_pl
+# (медиа и выплат тут нет — каналов нет, acq не задан), значит total_cost = разовые + opex×h
+_cb_f, _cb_pl = run(_cb_cfg)
+_bd_sum = sum(it["total_over_horizon"] for it in calc.cost_breakdown(_cb_cfg)
+              if it["total_over_horizon"] is not None)
+check("Раскладка сходится с реальными затратами P&L",
+      _bd_sum == _cb_pl["total_costs"] == 3_000_000 + 7_000_000 + 90_000_000,
+      f"раскладка {_bd_sum:,}, P&L {_cb_pl['total_costs']:,}")
+# выплата за привлечение зависит от числа клиентов — сумму не выдумываем
+_cb_acq = prm.defaults(); _cb_acq["costs"].update({"acq_cost_per_client": 1500})
+_acq_item = next(it for it in calc.cost_breakdown(_cb_acq) if it["key"] == "acq_cost_per_client")
+check("Раскладка: выплата за привлечение помечена как «на клиента» без выдуманной суммы",
+      _acq_item["kind"] == "на клиента" and _acq_item["total_over_horizon"] is None)
+
+# Мягкая заметка на строке постоянных расходов: есть всегда при opex > 0, порога нет.
+# Это НЕ предупреждение validate() и НЕ флаг — просто напоминание, что opex умножается
+# на горизонт, и куда отнести разовую статью, если она попала в opex по ошибке.
+# Текст и число (opex×горизонт) приходят готовыми из движка — UI ничего не считает.
+check("Раскладка: у постоянных расходов есть мягкая заметка при opex > 0",
+      bool(_bd["opex_monthly"].get("note")) and
+      "за горизонт" in _bd["opex_monthly"]["note"] and
+      "разовая статья" in _bd["opex_monthly"]["note"])
+check("Раскладка: заметка постоянных расходов несёт готовое число opex×горизонт",
+      calc.nf(90_000_000) in _bd["opex_monthly"]["note"],
+      _bd["opex_monthly"]["note"])
+# opex = 0 — статьи постоянных расходов нет вовсе, значит и заметки нет.
+_cb_noopex = prm.defaults()
+_cb_noopex["costs"].update({"production": 5_000_000, "opex_monthly": 0})
+_bd_no = {it["key"]: it for it in calc.cost_breakdown(_cb_noopex)}
+check("Раскладка: при opex = 0 строки постоянных расходов и заметки нет",
+      "opex_monthly" not in _bd_no)
 
 # выплаты за привлечение платятся за ВСЕХ сработавших, а не за инкремент
 cfg = copy.deepcopy(BASE); cfg["costs"]["acq_cost_per_client"] = 1000

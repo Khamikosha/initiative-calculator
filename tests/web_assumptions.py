@@ -268,6 +268,61 @@ check("Поля канала не разъезжаются по чужим ст�
       all("cpm" in v and "ctr" in v and "reach_abs" in v for v in _rows.values()),
       "иначе ch.0.budget соседствует с ch.1.cpm и данные теряются")
 
+
+# ------------------------------- Предпросмотр раскладки затрат (живой инцидент)
+# Разовую поддержку 2,5 млн ₽ завели в «Постоянные расходы», движок умножил на горизонт
+# (× 36) = 90 млн. Раскладка и вопрос должны быть видны в момент ввода. Проверяем
+# по ОТРИСОВАННОЙ разметке: контейнер есть на странице; эндпоинт возвращает строки.
+_cid = new_initiative("Раскладка затрат", type="product_launch", product="card")
+_capage = client.get(f"/initiative/{_cid}/assumptions").text
+check("Контейнер предпросмотра затрат отрисован на странице «Допущения»",
+      'id="costpreview-card"' in _capage and 'id="costpreview"' in _capage)
+check("Секция раскладки стоит под блоком «Горизонт и затраты»",
+      _capage.index("Горизонт и затраты") < _capage.index('id="costpreview-card"')
+      < _capage.index("Качество данных"))
+check("Раскладку затрат считает движок по HTTP, а не JS в шаблоне",
+      "/api/costs/preview" in client.get("/static/app.js").text)
+
+_cprev = client.post("/api/costs/preview", json={
+    "costs": {"opex_monthly": "2500000"}, "horizon_months": "36"}).json()
+_cby = {it["key"]: it for it in _cprev["items"]}
+check("Эндпоинт: 2,5 млн opex при горизонте 36 даёт total_over_horizon = 90 млн",
+      _cby["opex_monthly"]["total_over_horizon"] == 90_000_000 and
+      _cby["opex_monthly"]["kind"] == "постоянное" and
+      _cby["opex_monthly"]["months"] == 36,
+      f"пришло {_cby.get('opex_monthly')}")
+check("Эндпоинт отдаёт вопрос-предупреждение про статью затрат при opex-доминанте",
+      any("ПРОВЕРЬТЕ СТАТЬЮ ЗАТРАТ" in w for w in _cprev["warnings"]))
+
+# Мягкая заметка на строке постоянных расходов приходит в позиции opex готовой из движка
+# (текст + число opex×горизонт). Она есть ВСЕГДА при opex > 0 — в отличие от жёсткого
+# предупреждения выше, которое молчит при крупной законной разовой статье рядом.
+check("Эндпоинт: у позиции постоянных расходов есть мягкая заметка при opex > 0",
+      bool(_cby["opex_monthly"].get("note")) and
+      calc.nf(90_000_000) in _cby["opex_monthly"]["note"] and
+      "разовая статья" in _cby["opex_monthly"]["note"],
+      f"пришло {_cby['opex_monthly'].get('note')}")
+# UI только показывает заметку — рендер it.note под строкой позиции живёт в app.js,
+# формулы там нет. Проверяем по отрисовке предпросмотра (её строит app.js из ответа).
+check("Предпросмотр в разметке показывает заметку под строкой позиции (it.note в app.js)",
+      "it.note" in client.get("/static/app.js").text)
+
+# запятая как разделитель и разовая статья: списывается один раз, вопроса нет
+_cprev2 = client.post("/api/costs/preview", json={
+    "costs": {"production": "3 000 000", "opex_monthly": "2500000",
+              "it_dev": "7000000"}, "horizon_months": "36"}).json()
+_cby2 = {it["key"]: it for it in _cprev2["items"]}
+check("Эндпоинт: разовая статья списывается один раз (total = per_period)",
+      _cby2["production"]["kind"] == "разовое" and
+      _cby2["production"]["total_over_horizon"] == 3_000_000)
+check("Эндпоинт: при крупных разовых вопрос про статью затрат не задаётся",
+      not any("ПРОВЕРЬТЕ СТАТЬЮ ЗАТРАТ" in w for w in _cprev2["warnings"]))
+# на этом же кейсе (крупная законная разовая рядом с opex) жёсткое предупреждение
+# молчит, а мягкая заметка на строке постоянных расходов всё равно есть — в этом
+# её смысл: она универсальна и не зависит от узкой сигнатуры инцидента.
+check("Эндпоинт: заметка на opex есть и когда жёсткое предупреждение молчит",
+      bool(_cby2["opex_monthly"].get("note")))
+
 # и сквозная проверка: заполненные каналы переживают сохранение
 client.post(f"/initiative/{_fid}/assumptions", data={
     "costs.campaign_months": "3", "costs.production": "12000000",
